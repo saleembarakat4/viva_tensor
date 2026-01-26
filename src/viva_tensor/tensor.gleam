@@ -713,10 +713,220 @@ pub fn flatten(t: Tensor) -> Tensor {
   Tensor(data: data, shape: [size(t)])
 }
 
-/// Concatenate vectors
+/// Concatenate vectors (1D)
 pub fn concat(tensors: List(Tensor)) -> Tensor {
   let data = list.flat_map(tensors, fn(t) { get_data(t) })
   from_list(data)
+}
+
+/// Concatenate tensors along a specific axis
+/// For [2,3] and [2,3] tensors: concat_axis([a, b], 0) -> [4,3]
+/// For [2,3] and [2,3] tensors: concat_axis([a, b], 1) -> [2,6]
+pub fn concat_axis(
+  tensors: List(Tensor),
+  axis: Int,
+) -> Result(Tensor, TensorError) {
+  case tensors {
+    [] -> Error(InvalidShape("Cannot concatenate empty list"))
+    [single] -> Ok(single)
+    [first, ..rest] -> {
+      let base_shape = first.shape
+      let r = list.length(base_shape)
+
+      case axis >= 0 && axis < r {
+        False -> Error(DimensionError("Invalid axis for concatenation"))
+        True -> {
+          // Verify all tensors have same shape except on concat axis
+          let shapes_ok =
+            list.all(rest, fn(t) {
+              let t_shape = t.shape
+              case list.length(t_shape) == r {
+                False -> False
+                True -> {
+                  list.zip(base_shape, t_shape)
+                  |> list.index_map(fn(pair, i) { #(pair, i) })
+                  |> list.all(fn(x) {
+                    let #(#(dim_a, dim_b), i) = x
+                    i == axis || dim_a == dim_b
+                  })
+                }
+              }
+            })
+
+          case shapes_ok {
+            False -> Error(InvalidShape("Shapes must match except on concat axis"))
+            True -> {
+              // Build new shape
+              let concat_dim =
+                list.fold(tensors, 0, fn(acc, t) {
+                  case list.drop(t.shape, axis) |> list.first {
+                    Ok(d) -> acc + d
+                    Error(_) -> acc
+                  }
+                })
+
+              let new_shape =
+                base_shape
+                |> list.index_map(fn(d, i) {
+                  case i == axis {
+                    True -> concat_dim
+                    False -> d
+                  }
+                })
+
+              // Concatenate data
+              // For axis=0, we just append all data
+              // For other axes, we need to interleave
+              case axis == 0 {
+                True -> {
+                  let data = list.flat_map(tensors, fn(t) { get_data(t) })
+                  Ok(Tensor(data: data, shape: new_shape))
+                }
+                False -> {
+                  // General case: interleave based on axis
+                  let total_size =
+                    list.fold(new_shape, 1, fn(acc, d) { acc * d })
+                  let _new_strides = compute_strides(new_shape)
+
+                  let result =
+                    list.range(0, total_size - 1)
+                    |> list.map(fn(flat_idx) {
+                      let indices = flat_to_multi(flat_idx, new_shape)
+                      let axis_idx = case list.drop(indices, axis) |> list.first {
+                        Ok(i) -> i
+                        Error(_) -> 0
+                      }
+
+                      // Find which tensor and local index
+                      let #(tensor_idx, local_axis_idx, _) =
+                        list.fold(tensors, #(-1, axis_idx, 0), fn(acc, t) {
+                          let #(found_t, remaining, t_idx) = acc
+                          case found_t >= 0 {
+                            True -> acc
+                            False -> {
+                              let t_axis_size =
+                                case list.drop(t.shape, axis) |> list.first {
+                                  Ok(d) -> d
+                                  Error(_) -> 0
+                                }
+                              case remaining < t_axis_size {
+                                True -> #(t_idx, remaining, t_idx)
+                                False -> #(-1, remaining - t_axis_size, t_idx + 1)
+                              }
+                            }
+                          }
+                        })
+
+                      // Build local indices
+                      let local_indices =
+                        indices
+                        |> list.index_map(fn(idx, i) {
+                          case i == axis {
+                            True -> local_axis_idx
+                            False -> idx
+                          }
+                        })
+
+                      // Get value from correct tensor
+                      case list.drop(tensors, tensor_idx) |> list.first {
+                        Ok(t) -> {
+                          let t_strides = compute_strides(t.shape)
+                          let local_flat =
+                            list.zip(local_indices, t_strides)
+                            |> list.fold(0, fn(a, p) { a + p.0 * p.1 })
+                          let t_data = get_data(t)
+                          case list.drop(t_data, local_flat) |> list.first {
+                            Ok(v) -> v
+                            Error(_) -> 0.0
+                          }
+                        }
+                        Error(_) -> 0.0
+                      }
+                    })
+
+                  Ok(Tensor(data: result, shape: new_shape))
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+/// Stack tensors along a new axis
+/// For [3] and [3] tensors: stack([a, b], 0) -> [2, 3]
+/// For [3] and [3] tensors: stack([a, b], 1) -> [3, 2]
+pub fn stack(tensors: List(Tensor), axis: Int) -> Result(Tensor, TensorError) {
+  case tensors {
+    [] -> Error(InvalidShape("Cannot stack empty list"))
+    [first, ..rest] -> {
+      let base_shape = first.shape
+      let shapes_ok = list.all(rest, fn(t) { t.shape == base_shape })
+
+      case shapes_ok {
+        False -> Error(ShapeMismatch(expected: base_shape, got: []))
+        True -> {
+          let n_tensors = list.length(tensors)
+          let r = list.length(base_shape)
+          let insert_axis = case axis < 0 {
+            True -> r + axis + 1
+            False -> axis
+          }
+
+          case insert_axis >= 0 && insert_axis <= r {
+            False -> Error(DimensionError("Invalid axis for stacking"))
+            True -> {
+              // New shape: insert n_tensors at axis position
+              let #(before, after) = list.split(base_shape, insert_axis)
+              let _new_shape = list.flatten([before, [n_tensors], after])
+
+              // Unsqueeze each tensor and concat
+              let unsqueezed =
+                tensors
+                |> list.map(fn(t) { unsqueeze(t, insert_axis) })
+
+              concat_axis(unsqueezed, insert_axis)
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+/// Take first N elements along first axis
+pub fn take_first(t: Tensor, n: Int) -> Tensor {
+  let data = get_data(t)
+  case t.shape {
+    [] -> t
+    [first_dim, ..rest_dims] -> {
+      let take_n = int.min(n, first_dim)
+      let stride =
+        list.fold(rest_dims, 1, fn(acc, d) { acc * d })
+      let new_data = list.take(data, take_n * stride)
+      let new_shape = [take_n, ..rest_dims]
+      Tensor(data: new_data, shape: new_shape)
+    }
+  }
+}
+
+/// Take last N elements along first axis
+pub fn take_last(t: Tensor, n: Int) -> Tensor {
+  let data = get_data(t)
+  case t.shape {
+    [] -> t
+    [first_dim, ..rest_dims] -> {
+      let take_n = int.min(n, first_dim)
+      let stride =
+        list.fold(rest_dims, 1, fn(acc, d) { acc * d })
+      let skip = { first_dim - take_n } * stride
+      let new_data = list.drop(data, skip)
+      let new_shape = [take_n, ..rest_dims]
+      Tensor(data: new_data, shape: new_shape)
+    }
+  }
 }
 
 /// L2 norm
