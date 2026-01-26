@@ -94,11 +94,12 @@ pub fn collect_activation_stats(
       let initial = list.repeat(0.0, num_channels)
 
       // Acumula abs(activation) por canal
-      let sums = list.fold(activations_batch, initial, fn(acc, activation) {
-        list.map2(acc, activation, fn(sum, act) {
-          sum +. float.absolute_value(act)
+      let sums =
+        list.fold(activations_batch, initial, fn(acc, activation) {
+          list.map2(acc, activation, fn(sum, act) {
+            sum +. float.absolute_value(act)
+          })
         })
-      })
 
       // Divide pelo número de amostras
       let num_samples = int.to_float(list.length(activations_batch))
@@ -117,14 +118,15 @@ pub fn compute_awq_scales(
   activation_stats: List(Float),
   alpha: Float,
 ) -> AWQScales {
-  let weight_scales = list.map(activation_stats, fn(stat) {
-    // Evita scale zero
-    let safe_stat = case stat >. 0.0 {
-      True -> stat
-      False -> 1.0
-    }
-    float_power(safe_stat, alpha)
-  })
+  let weight_scales =
+    list.map(activation_stats, fn(stat) {
+      // Evita scale zero
+      let safe_stat = case stat >. 0.0 {
+        True -> stat
+        False -> 1.0
+      }
+      float_power(safe_stat, alpha)
+    })
 
   AWQScales(
     weight_scales: weight_scales,
@@ -193,11 +195,8 @@ pub fn quantize_awq(
 
   // Step 4: Quantização simétrica dos pesos transformados
   let flat_transformed = list.flatten(transformed_weights)
-  let #(quantized, quant_scales) = symmetric_group_quantize(
-    flat_transformed,
-    config.bits,
-    config.group_size,
-  )
+  let #(quantized, quant_scales) =
+    symmetric_group_quantize(flat_transformed, config.bits, config.group_size)
 
   // Calcula memória
   // - bits/valor para dados
@@ -205,8 +204,10 @@ pub fn quantize_awq(
   let num_elements = list.length(flat_transformed)
   let num_groups = { num_elements + config.group_size - 1 } / config.group_size
   let data_bytes = { num_elements * config.bits + 7 } / 8
-  let scale_bytes = num_groups * 2  // FP16
-  let awq_scale_bytes = in_features * 2  // FP16 para AWQ scales
+  let scale_bytes = num_groups * 2
+  // FP16
+  let awq_scale_bytes = in_features * 2
+  // FP16 para AWQ scales
   let memory = data_bytes + scale_bytes + awq_scale_bytes
 
   AWQTensor(
@@ -225,20 +226,20 @@ fn symmetric_group_quantize(
   bits: Int,
   group_size: Int,
 ) -> #(List(Int), List(Float)) {
-  let qmax = float.power(2.0, int.to_float(bits - 1))
+  let qmax =
+    float.power(2.0, int.to_float(bits - 1))
     |> float_result_to_float(128.0)
     |> fn(x) { x -. 1.0 }
 
   let groups = list.sized_chunk(values, group_size)
 
-  let #(quantized_groups, scales) = list.fold(
-    groups,
-    #([], []),
-    fn(acc, group) {
+  let #(quantized_groups, scales) =
+    list.fold(groups, #([], []), fn(acc, group) {
       let #(q_acc, s_acc) = acc
 
       // Encontra max abs no grupo
-      let max_abs = group
+      let max_abs =
+        group
         |> list.map(float.absolute_value)
         |> list.fold(0.0, float.max)
 
@@ -248,15 +249,15 @@ fn symmetric_group_quantize(
       }
 
       // Quantiza
-      let quantized = list.map(group, fn(v) {
-        let scaled = v *. scale
-        let clamped = float.clamp(scaled, -1.0 *. qmax, qmax)
-        float.round(clamped)
-      })
+      let quantized =
+        list.map(group, fn(v) {
+          let scaled = v *. scale
+          let clamped = float.clamp(scaled, -1.0 *. qmax, qmax)
+          float.round(clamped)
+        })
 
       #(list.append(q_acc, quantized), [scale, ..s_acc])
-    }
-  )
+    })
 
   #(quantized_groups, list.reverse(scales))
 }
@@ -275,12 +276,12 @@ pub fn dequantize_awq(awq: AWQTensor) -> Tensor {
   let groups = list.sized_chunk(awq.quantized_weights, group_size)
 
   // Dequantiza por grupo
-  let dequantized = list.index_map(groups, fn(group, idx) {
-    let scale = get_at_index_float(awq.quant_scales, idx, 1.0)
-    list.map(group, fn(q) {
-      int.to_float(q) /. scale
+  let dequantized =
+    list.index_map(groups, fn(group, idx) {
+      let scale = get_at_index_float(awq.quant_scales, idx, 1.0)
+      list.map(group, fn(q) { int.to_float(q) /. scale })
     })
-  }) |> list.flatten
+    |> list.flatten
 
   // Desfaz AWQ transform (divide por scales)
   let in_features = case awq.shape {
@@ -290,14 +291,16 @@ pub fn dequantize_awq(awq: AWQTensor) -> Tensor {
 
   let weight_matrix = list.sized_chunk(dequantized, in_features)
 
-  let restored = list.map(weight_matrix, fn(row) {
-    list.map2(row, awq.awq_scales.weight_scales, fn(w, s) {
-      case s >. 0.0 {
-        True -> w /. s
-        False -> w
-      }
+  let restored =
+    list.map(weight_matrix, fn(row) {
+      list.map2(row, awq.awq_scales.weight_scales, fn(w, s) {
+        case s >. 0.0 {
+          True -> w /. s
+          False -> w
+        }
+      })
     })
-  }) |> list.flatten
+    |> list.flatten
 
   Tensor(data: restored, shape: awq.shape)
 }
@@ -312,13 +315,15 @@ pub fn identify_salient_channels(
   top_percent: Float,
 ) -> List(Int) {
   let n = list.length(activation_stats)
-  let k = float.round(int.to_float(n) *. top_percent /. 100.0)
+  let k =
+    float.round(int.to_float(n) *. top_percent /. 100.0)
     |> int.max(1)
 
   // Ordena por magnitude e pega top-k índices
   activation_stats
   |> list.index_map(fn(stat, idx) { #(idx, stat) })
-  |> list.sort(fn(a, b) { float.compare(b.1, a.1) })  // Descending
+  |> list.sort(fn(a, b) { float.compare(b.1, a.1) })
+  // Descending
   |> list.take(k)
   |> list.map(fn(pair) { pair.0 })
 }
@@ -332,10 +337,18 @@ pub fn main() {
 }
 
 pub fn benchmark_awq() {
-  io.println("╔══════════════════════════════════════════════════════════════════╗")
-  io.println("║  AWQ (Activation-aware Weight Quantization)                      ║")
-  io.println("║  MLSys 2024 BEST PAPER AWARD!                                    ║")
-  io.println("╚══════════════════════════════════════════════════════════════════╝\n")
+  io.println(
+    "╔══════════════════════════════════════════════════════════════════╗",
+  )
+  io.println(
+    "║  AWQ (Activation-aware Weight Quantization)                      ║",
+  )
+  io.println(
+    "║  MLSys 2024 BEST PAPER AWARD!                                    ║",
+  )
+  io.println(
+    "╚══════════════════════════════════════════════════════════════════╝\n",
+  )
 
   io.println("CONCEITO:")
   io.println("  - Apenas ~1% dos pesos são 'salientes'")
@@ -348,7 +361,8 @@ pub fn benchmark_awq() {
   let weights = tensor.random_uniform([512, 256])
 
   // Simula dados de calibração (100 amostras x 256 features)
-  let calibration_data = list.range(1, 100)
+  let calibration_data =
+    list.range(1, 100)
     |> list.map(fn(_) {
       tensor.random_uniform([256])
       |> tensor.to_list
@@ -363,7 +377,10 @@ pub fn benchmark_awq() {
 
   // Analisa saliência
   let salient_channels = identify_salient_channels(activation_stats, 1.0)
-  io.println("  Canais salientes (top 1%): " <> int.to_string(list.length(salient_channels)))
+  io.println(
+    "  Canais salientes (top 1%): "
+    <> int.to_string(list.length(salient_channels)),
+  )
 
   // Mostra top 5 canais salientes
   io.println("  Top 5 canais mais salientes:")
@@ -371,20 +388,25 @@ pub fn benchmark_awq() {
   |> list.take(5)
   |> list.each(fn(idx) {
     let stat = get_at_index_float(activation_stats, idx, 0.0)
-    io.println("    Canal " <> int.to_string(idx) <> ": " <> float_to_string(stat))
+    io.println(
+      "    Canal " <> int.to_string(idx) <> ": " <> float_to_string(stat),
+    )
   })
 
   io.println("\n━━━ AWQ QUANTIZATION ━━━")
-  let #(time_awq, awq_tensor) = timer_tc(fn() {
-    quantize_awq(weights, calibration_data, config)
-  })
+  let #(time_awq, awq_tensor) =
+    timer_tc(fn() { quantize_awq(weights, calibration_data, config) })
 
-  let original_bytes = 512 * 256 * 4  // FP32
-  let ratio = int.to_float(original_bytes) /. int.to_float(awq_tensor.memory_bytes)
+  let original_bytes = 512 * 256 * 4
+  // FP32
+  let ratio =
+    int.to_float(original_bytes) /. int.to_float(awq_tensor.memory_bytes)
 
   io.println("  Tempo:       " <> int.to_string(time_awq / 1000) <> "ms")
   io.println("  Original:    " <> int.to_string(original_bytes / 1024) <> " KB")
-  io.println("  Comprimido:  " <> int.to_string(awq_tensor.memory_bytes / 1024) <> " KB")
+  io.println(
+    "  Comprimido:  " <> int.to_string(awq_tensor.memory_bytes / 1024) <> " KB",
+  )
   io.println("  Compressão:  " <> float_to_string(ratio) <> "x")
 
   // Verifica erro
@@ -393,9 +415,8 @@ pub fn benchmark_awq() {
   let orig_data = tensor.to_list(weights)
   let decomp_data = tensor.to_list(decompressed)
 
-  let errors = list.map2(orig_data, decomp_data, fn(o, d) {
-    float.absolute_value(o -. d)
-  })
+  let errors =
+    list.map2(orig_data, decomp_data, fn(o, d) { float.absolute_value(o -. d) })
 
   let mean_error = case errors {
     [] -> 0.0
@@ -413,16 +434,36 @@ pub fn benchmark_awq() {
   io.println("  Esses canais têm MAIOR impacto na saída")
   io.println("  Resultado: mesma compressão, MUITO menos perda de qualidade")
 
-  io.println("\n╔══════════════════════════════════════════════════════════════════╗")
-  io.println("║  POR QUE AWQ VENCEU O MLSYS 2024:                                ║")
-  io.println("║                                                                  ║")
-  io.println("║  1. Insight simples mas poderoso: foca nas ativações             ║")
-  io.println("║  2. Zero custo em runtime (transformação pré-computada)          ║")
-  io.println("║  3. Funciona com qualquer quantização (INT4, INT8, NF4)          ║")
-  io.println("║  4. Estado da arte em LLMs quantizados                           ║")
-  io.println("║                                                                  ║")
-  io.println("║  viva_tensor + AWQ = Máxima precisão com 8x compressão!          ║")
-  io.println("╚══════════════════════════════════════════════════════════════════╝")
+  io.println(
+    "\n╔══════════════════════════════════════════════════════════════════╗",
+  )
+  io.println(
+    "║  POR QUE AWQ VENCEU O MLSYS 2024:                                ║",
+  )
+  io.println(
+    "║                                                                  ║",
+  )
+  io.println(
+    "║  1. Insight simples mas poderoso: foca nas ativações             ║",
+  )
+  io.println(
+    "║  2. Zero custo em runtime (transformação pré-computada)          ║",
+  )
+  io.println(
+    "║  3. Funciona com qualquer quantização (INT4, INT8, NF4)          ║",
+  )
+  io.println(
+    "║  4. Estado da arte em LLMs quantizados                           ║",
+  )
+  io.println(
+    "║                                                                  ║",
+  )
+  io.println(
+    "║  viva_tensor + AWQ = Máxima precisão com 8x compressão!          ║",
+  )
+  io.println(
+    "╚══════════════════════════════════════════════════════════════════╝",
+  )
 }
 
 // ============================================================================
@@ -458,7 +499,7 @@ fn float_result_to_float(r: Result(Float, a), default: Float) -> Float {
 }
 
 fn float_to_string(f: Float) -> String {
-  let rounded = int.to_float(float.round(f *. 10000.0)) /. 10000.0
+  let rounded = int.to_float(float.round(f *. 10_000.0)) /. 10_000.0
   float.to_string(rounded)
 }
 

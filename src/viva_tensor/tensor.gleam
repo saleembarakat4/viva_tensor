@@ -464,7 +464,8 @@ pub fn sum_axis(t: Tensor, axis_idx: Int) -> Result(Tensor, TensorError) {
               // Sum over all values at this position along the axis
               list.range(0, axis_size - 1)
               |> list.fold(0.0, fn(acc, axis_pos) {
-                let in_idx = compute_index_with_axis(t.shape, out_idx, axis_idx, axis_pos)
+                let in_idx =
+                  compute_index_with_axis(t.shape, out_idx, axis_idx, axis_pos)
                 let val = case list.drop(data, in_idx) |> list.first {
                   Ok(v) -> v
                   Error(_) -> 0.0
@@ -492,8 +493,7 @@ pub fn mean_axis(t: Tensor, axis_idx: Int) -> Result(Tensor, TensorError) {
       }
       case sum_axis(t, axis_idx) {
         Error(e) -> Error(e)
-        Ok(summed) ->
-          Ok(scale(summed, 1.0 /. int.to_float(axis_size)))
+        Ok(summed) -> Ok(scale(summed, 1.0 /. int.to_float(axis_size)))
       }
     }
   }
@@ -754,7 +754,11 @@ pub fn random_uniform(shape: List(Int)) -> Tensor {
 }
 
 /// Tensor with normal random values (approx via Box-Muller)
-pub fn random_normal(shape: List(Int), mean_val: Float, std_val: Float) -> Tensor {
+pub fn random_normal(
+  shape: List(Int),
+  mean_val: Float,
+  std_val: Float,
+) -> Tensor {
   let size_val = list.fold(shape, 1, fn(acc, dim) { acc * dim })
   let data =
     list.range(1, size_val)

@@ -94,10 +94,14 @@ pub type CompressionStats {
 /// Configuração padrão NVFP4 (Blackwell style)
 pub fn nvfp4_config() -> CompressionConfig {
   CompressionConfig(
-    block_size: 16,        // Micro-block de 16 valores
-    bits_per_value: 4,     // 4-bit quantization
-    symmetric: False,      // Usa zero-point
-    max_error_pct: 2.0,    // 2% erro máximo aceitável
+    block_size: 16,
+    // Micro-block de 16 valores
+    bits_per_value: 4,
+    // 4-bit quantization
+    symmetric: False,
+    // Usa zero-point
+    max_error_pct: 2.0,
+    // 2% erro máximo aceitável
   )
 }
 
@@ -128,16 +132,17 @@ pub fn compress(t: Tensor, config: CompressionConfig) -> BlackwellTensor {
   }
 
   // Quantiza cada micro-block
-  let blocks = list.map(chunks, fn(chunk) {
-    quantize_microblock(chunk, config, global_scale)
-  })
+  let blocks =
+    list.map(chunks, fn(chunk) {
+      quantize_microblock(chunk, config, global_scale)
+    })
 
   // Calcula memória usada
   // Cada block: (block_size * bits_per_value / 8) + 4 bytes (scale) + 4 bytes (zero_point)
-  let bytes_per_block =
-    { config.block_size * config.bits_per_value / 8 } + 8
+  let bytes_per_block = { config.block_size * config.bits_per_value / 8 } + 8
   let num_blocks = list.length(blocks)
-  let memory = { num_blocks * bytes_per_block } + 4  // +4 para global_scale
+  let memory = { num_blocks * bytes_per_block } + 4
+  // +4 para global_scale
 
   // Original seria: num_elements * 4 bytes (FP32)
   let original_memory = num_elements * 4
@@ -169,10 +174,14 @@ fn quantize_microblock(
   let #(scale, zero_point) = case config.symmetric {
     True -> {
       // Symmetric: zero_point = 0, escala baseada em max abs
-      let max_abs = float.max(float.absolute_value(block_min),
-                              float.absolute_value(block_max))
-      let max_int = float.power(2.0, int.to_float(config.bits_per_value - 1))
-               |> result_to_float(128.0)
+      let max_abs =
+        float.max(
+          float.absolute_value(block_min),
+          float.absolute_value(block_max),
+        )
+      let max_int =
+        float.power(2.0, int.to_float(config.bits_per_value - 1))
+        |> result_to_float(128.0)
       let scale = case max_abs >. 0.0 {
         True -> max_int /. max_abs
         False -> 1.0
@@ -182,8 +191,9 @@ fn quantize_microblock(
     False -> {
       // Asymmetric: usa todo o range
       let range = block_max -. block_min
-      let max_int = float.power(2.0, int.to_float(config.bits_per_value))
-                |> result_to_float(16.0)
+      let max_int =
+        float.power(2.0, int.to_float(config.bits_per_value))
+        |> result_to_float(16.0)
       let scale = case range >. 0.0 {
         True -> { max_int -. 1.0 } /. range
         False -> 1.0
@@ -193,32 +203,31 @@ fn quantize_microblock(
   }
 
   // Quantiza valores
-  let max_val = float.power(2.0, int.to_float(config.bits_per_value))
-             |> result_to_float(16.0)
-             |> fn(x) { x -. 1.0 }
+  let max_val =
+    float.power(2.0, int.to_float(config.bits_per_value))
+    |> result_to_float(16.0)
+    |> fn(x) { x -. 1.0 }
 
-  let quantized = list.map(normalized, fn(v) {
-    let shifted = { v -. zero_point } *. scale
-    let clamped = float.clamp(shifted, 0.0, max_val)
-    float.round(clamped)
-  })
+  let quantized =
+    list.map(normalized, fn(v) {
+      let shifted = { v -. zero_point } *. scale
+      let clamped = float.clamp(shifted, 0.0, max_val)
+      float.round(clamped)
+    })
 
-  MicroBlock(
-    values: quantized,
-    scale: scale,
-    zero_point: zero_point,
-  )
+  MicroBlock(values: quantized, scale: scale, zero_point: zero_point)
 }
 
 /// Descomprime tensor Blackwell de volta para FP32
 pub fn decompress(bt: BlackwellTensor) -> Tensor {
-  let data = list.flat_map(bt.blocks, fn(block) {
-    list.map(block.values, fn(q) {
-      // Dequantiza: (q / scale + zero_point) * global_scale
-      let dequant = { int.to_float(q) /. block.scale } +. block.zero_point
-      dequant *. bt.global_scale
+  let data =
+    list.flat_map(bt.blocks, fn(block) {
+      list.map(block.values, fn(q) {
+        // Dequantiza: (q / scale + zero_point) * global_scale
+        let dequant = { int.to_float(q) /. block.scale } +. block.zero_point
+        dequant *. bt.global_scale
+      })
     })
-  })
 
   // Trunca para o número original de elementos
   let truncated = list.take(data, bt.num_elements)
@@ -239,15 +248,17 @@ pub fn compression_stats(
   let compressed_bytes = compressed.memory_bytes
 
   // Calcula erros
-  let errors = list.zip(original_data, decompressed_data)
+  let errors =
+    list.zip(original_data, decompressed_data)
     |> list.map(fn(pair) {
       let #(o, d) = pair
       float.absolute_value(o -. d)
     })
 
   let mean_error = case list.length(errors) > 0 {
-    True -> list.fold(errors, 0.0, fn(acc, e) { acc +. e })
-            /. int.to_float(list.length(errors))
+    True ->
+      list.fold(errors, 0.0, fn(acc, e) { acc +. e })
+      /. int.to_float(list.length(errors))
     False -> 0.0
   }
 
@@ -269,11 +280,7 @@ pub fn compression_stats(
 
 /// Chunk de dados em streaming
 pub type StreamChunk {
-  StreamChunk(
-    id: Int,
-    block: MicroBlock,
-    compressed: Bool,
-  )
+  StreamChunk(id: Int, block: MicroBlock, compressed: Bool)
 }
 
 /// Estado do compressor em streaming
@@ -303,22 +310,24 @@ pub fn process_chunk(
 ) -> #(StreamState, MicroBlock) {
   // Comprime o chunk
   let global_scale = find_max_abs(data)
-  let block = quantize_microblock(data, state.config,
-    case global_scale >. 0.0 {
+  let block =
+    quantize_microblock(data, state.config, case global_scale >. 0.0 {
       True -> global_scale
       False -> 1.0
     })
 
   // Atualiza estatísticas
   let bytes_in = list.length(data) * 4
-  let bytes_out = { state.config.block_size * state.config.bits_per_value / 8 } + 8
+  let bytes_out =
+    { state.config.block_size * state.config.bits_per_value / 8 } + 8
 
-  let new_state = StreamState(
-    ..state,
-    processed_chunks: state.processed_chunks + 1,
-    total_bytes_in: state.total_bytes_in + bytes_in,
-    total_bytes_out: state.total_bytes_out + bytes_out,
-  )
+  let new_state =
+    StreamState(
+      ..state,
+      processed_chunks: state.processed_chunks + 1,
+      total_bytes_in: state.total_bytes_in + bytes_in,
+      total_bytes_out: state.total_bytes_out + bytes_out,
+    )
 
   #(new_state, block)
 }
@@ -384,10 +393,11 @@ fn analyze_distribution(data: List(Float)) -> DistributionStats {
   // Variance and std
   let variance = case n > 0 {
     True -> {
-      let sum_sq = list.fold(data, 0.0, fn(acc, v) {
-        let diff = v -. mean
-        acc +. { diff *. diff }
-      })
+      let sum_sq =
+        list.fold(data, 0.0, fn(acc, v) {
+          let diff = v -. mean
+          acc +. { diff *. diff }
+        })
       sum_sq /. n_float
     }
     False -> 0.0
@@ -404,9 +414,8 @@ fn analyze_distribution(data: List(Float)) -> DistributionStats {
 
   // Sparsity (% de valores próximos de zero)
   let zero_threshold = 0.001
-  let near_zero = list.filter(data, fn(v) {
-    float.absolute_value(v) <. zero_threshold
-  })
+  let near_zero =
+    list.filter(data, fn(v) { float.absolute_value(v) <. zero_threshold })
   let sparsity = int.to_float(list.length(near_zero)) /. n_float
 
   DistributionStats(
@@ -442,24 +451,36 @@ pub type MemoryLevel {
 /// Simula latência de acesso
 pub fn memory_latency_ns(level: MemoryLevel) -> Int {
   case level {
-    Registers -> 1      // 1 cycle
-    L1Cache -> 4        // 4 cycles
-    L2Cache -> 12       // 12 cycles
-    Hbm -> 200          // ~200ns
-    SystemRam -> 100    // ~100ns (DDR5)
-    Storage -> 10_000   // ~10µs (NVMe)
+    Registers -> 1
+    // 1 cycle
+    L1Cache -> 4
+    // 4 cycles
+    L2Cache -> 12
+    // 12 cycles
+    Hbm -> 200
+    // ~200ns
+    SystemRam -> 100
+    // ~100ns (DDR5)
+    Storage -> 10_000
+    // ~10µs (NVMe)
   }
 }
 
 /// Simula bandwidth em GB/s
 pub fn memory_bandwidth_gbps(level: MemoryLevel) -> Float {
   case level {
-    Registers -> 10_000.0   // Infinito efetivo
-    L1Cache -> 1000.0       // ~1 TB/s
-    L2Cache -> 500.0        // ~500 GB/s
-    Hbm -> 8000.0           // Blackwell: 8 TB/s
-    SystemRam -> 51.2       // DDR5-3200 dual channel
-    Storage -> 7.0          // NVMe Gen4
+    Registers -> 10_000.0
+    // Infinito efetivo
+    L1Cache -> 1000.0
+    // ~1 TB/s
+    L2Cache -> 500.0
+    // ~500 GB/s
+    Hbm -> 8000.0
+    // Blackwell: 8 TB/s
+    SystemRam -> 51.2
+    // DDR5-3200 dual channel
+    Storage -> 7.0
+    // NVMe Gen4
   }
 }
 
@@ -468,7 +489,8 @@ pub fn transfer_time_us(size_mb: Float, level: MemoryLevel) -> Float {
   let bandwidth = memory_bandwidth_gbps(level)
   let size_gb = size_mb /. 1024.0
   let time_s = size_gb /. bandwidth
-  time_s *. 1_000_000.0  // Converte para µs
+  time_s *. 1_000_000.0
+  // Converte para µs
 }
 
 // ============================================================================
@@ -480,13 +502,22 @@ pub fn main() {
 }
 
 pub fn benchmark_blackwell_compression() {
-  io.println("╔══════════════════════════════════════════════════════════════════╗")
-  io.println("║  BLACKWELL-INSPIRED COMPRESSION ENGINE                           ║")
-  io.println("║  Pure Gleam competindo com hardware dedicado!                    ║")
-  io.println("╚══════════════════════════════════════════════════════════════════╝\n")
+  io.println(
+    "╔══════════════════════════════════════════════════════════════════╗",
+  )
+  io.println(
+    "║  BLACKWELL-INSPIRED COMPRESSION ENGINE                           ║",
+  )
+  io.println(
+    "║  Pure Gleam competindo com hardware dedicado!                    ║",
+  )
+  io.println(
+    "╚══════════════════════════════════════════════════════════════════╝\n",
+  )
 
   // Cria tensor de teste
-  let size = 1024 * 512  // ~2MB em FP32
+  let size = 1024 * 512
+  // ~2MB em FP32
   let t = tensor.random_uniform([1024, 512])
 
   io.println("TENSOR ORIGINAL:")
@@ -497,43 +528,54 @@ pub fn benchmark_blackwell_compression() {
   // Teste NVFP4 (Blackwell style)
   io.println("\n━━━ NVFP4 COMPRESSION (Blackwell Style) ━━━")
   let config_q4 = nvfp4_config()
-  let #(time_q4, compressed_q4) = timer_tc(fn() {
-    compress(t, config_q4)
-  })
+  let #(time_q4, compressed_q4) = timer_tc(fn() { compress(t, config_q4) })
   let stats_q4 = compression_stats(t, compressed_q4)
 
   io.println("  Config: 16-value micro-blocks, 4-bit quantization")
   io.println("  Tempo compressão: " <> int.to_string(time_q4 / 1000) <> "ms")
-  io.println("  Memória: " <> int.to_string(stats_q4.compressed_bytes / 1024) <> " KB")
-  io.println("  Compressão: " <> float_to_string(stats_q4.compression_ratio) <> "x")
-  io.println("  Erro médio: " <> float_to_string(stats_q4.mean_error) <> " (" <>
-             float_to_string(stats_q4.mean_error *. 100.0) <> "%)")
+  io.println(
+    "  Memória: " <> int.to_string(stats_q4.compressed_bytes / 1024) <> " KB",
+  )
+  io.println(
+    "  Compressão: " <> float_to_string(stats_q4.compression_ratio) <> "x",
+  )
+  io.println(
+    "  Erro médio: "
+    <> float_to_string(stats_q4.mean_error)
+    <> " ("
+    <> float_to_string(stats_q4.mean_error *. 100.0)
+    <> "%)",
+  )
   io.println("  Blocks: " <> int.to_string(stats_q4.blocks_processed))
 
   // Teste INT8
   io.println("\n━━━ INT8 COMPRESSION (Alta Precisão) ━━━")
   let config_int8 = int8_config()
-  let #(time_int8, compressed_int8) = timer_tc(fn() {
-    compress(t, config_int8)
-  })
+  let #(time_int8, compressed_int8) =
+    timer_tc(fn() { compress(t, config_int8) })
   let stats_int8 = compression_stats(t, compressed_int8)
 
   io.println("  Config: 32-value blocks, 8-bit symmetric quantization")
   io.println("  Tempo compressão: " <> int.to_string(time_int8 / 1000) <> "ms")
-  io.println("  Memória: " <> int.to_string(stats_int8.compressed_bytes / 1024) <> " KB")
-  io.println("  Compressão: " <> float_to_string(stats_int8.compression_ratio) <> "x")
+  io.println(
+    "  Memória: " <> int.to_string(stats_int8.compressed_bytes / 1024) <> " KB",
+  )
+  io.println(
+    "  Compressão: " <> float_to_string(stats_int8.compression_ratio) <> "x",
+  )
   io.println("  Erro médio: " <> float_to_string(stats_int8.mean_error))
 
   // Teste Adaptive
   io.println("\n━━━ ADAPTIVE COMPRESSION ━━━")
-  let #(time_adaptive, compressed_adaptive) = timer_tc(fn() {
-    analyze_and_compress(t)
-  })
+  let #(time_adaptive, compressed_adaptive) =
+    timer_tc(fn() { analyze_and_compress(t) })
   let stats_adaptive = compression_stats(t, compressed_adaptive)
 
   io.println("  Análise automática de distribuição")
   io.println("  Tempo: " <> int.to_string(time_adaptive / 1000) <> "ms")
-  io.println("  Compressão: " <> float_to_string(stats_adaptive.compression_ratio) <> "x")
+  io.println(
+    "  Compressão: " <> float_to_string(stats_adaptive.compression_ratio) <> "x",
+  )
 
   // Simulação de hierarquia de memória
   io.println("\n━━━ MEMORY HIERARCHY SIMULATION ━━━")
@@ -543,24 +585,48 @@ pub fn benchmark_blackwell_compression() {
   io.println("")
   io.println("  Level       | Bandwidth  | Transfer Time")
   io.println("  ------------|------------|-------------")
-  io.println("  Registers   | " <>
-    pad_right(float_to_string(memory_bandwidth_gbps(Registers)), 8) <> " GB/s | " <>
-    float_to_string(transfer_time_us(tensor_mb, Registers)) <> " µs")
-  io.println("  L1 Cache    | " <>
-    pad_right(float_to_string(memory_bandwidth_gbps(L1Cache)), 8) <> " GB/s | " <>
-    float_to_string(transfer_time_us(tensor_mb, L1Cache)) <> " µs")
-  io.println("  L2 Cache    | " <>
-    pad_right(float_to_string(memory_bandwidth_gbps(L2Cache)), 8) <> " GB/s | " <>
-    float_to_string(transfer_time_us(tensor_mb, L2Cache)) <> " µs")
-  io.println("  HBM3e       | " <>
-    pad_right(float_to_string(memory_bandwidth_gbps(Hbm)), 8) <> " GB/s | " <>
-    float_to_string(transfer_time_us(tensor_mb, Hbm)) <> " µs")
-  io.println("  System RAM  | " <>
-    pad_right(float_to_string(memory_bandwidth_gbps(SystemRam)), 8) <> " GB/s | " <>
-    float_to_string(transfer_time_us(tensor_mb, SystemRam)) <> " µs")
-  io.println("  NVMe SSD    | " <>
-    pad_right(float_to_string(memory_bandwidth_gbps(Storage)), 8) <> " GB/s | " <>
-    float_to_string(transfer_time_us(tensor_mb, Storage)) <> " µs")
+  io.println(
+    "  Registers   | "
+    <> pad_right(float_to_string(memory_bandwidth_gbps(Registers)), 8)
+    <> " GB/s | "
+    <> float_to_string(transfer_time_us(tensor_mb, Registers))
+    <> " µs",
+  )
+  io.println(
+    "  L1 Cache    | "
+    <> pad_right(float_to_string(memory_bandwidth_gbps(L1Cache)), 8)
+    <> " GB/s | "
+    <> float_to_string(transfer_time_us(tensor_mb, L1Cache))
+    <> " µs",
+  )
+  io.println(
+    "  L2 Cache    | "
+    <> pad_right(float_to_string(memory_bandwidth_gbps(L2Cache)), 8)
+    <> " GB/s | "
+    <> float_to_string(transfer_time_us(tensor_mb, L2Cache))
+    <> " µs",
+  )
+  io.println(
+    "  HBM3e       | "
+    <> pad_right(float_to_string(memory_bandwidth_gbps(Hbm)), 8)
+    <> " GB/s | "
+    <> float_to_string(transfer_time_us(tensor_mb, Hbm))
+    <> " µs",
+  )
+  io.println(
+    "  System RAM  | "
+    <> pad_right(float_to_string(memory_bandwidth_gbps(SystemRam)), 8)
+    <> " GB/s | "
+    <> float_to_string(transfer_time_us(tensor_mb, SystemRam))
+    <> " µs",
+  )
+  io.println(
+    "  NVMe SSD    | "
+    <> pad_right(float_to_string(memory_bandwidth_gbps(Storage)), 8)
+    <> " GB/s | "
+    <> float_to_string(transfer_time_us(tensor_mb, Storage))
+    <> " µs",
+  )
 
   // Física do silício
   io.println("\n━━━ FÍSICA DO SILÍCIO ━━━")
@@ -575,17 +641,41 @@ pub fn benchmark_blackwell_compression() {
   io.println("  Blackwell HBM3e: 8 TB/s total")
   io.println("  NVLink 5: 1.8 TB/s bidirecional")
 
-  io.println("\n╔══════════════════════════════════════════════════════════════════╗")
-  io.println("║  CONCLUSÃO:                                                      ║")
-  io.println("║                                                                  ║")
-  io.println("║  NVFP4 Compression (Blackwell Style):                            ║")
-  io.println("║  ├── Micro-blocks de 16 valores                                  ║")
-  io.println("║  ├── Two-level scaling (local + global)                          ║")
-  io.println("║  ├── " <> pad_right(float_to_string(stats_q4.compression_ratio) <> "x", 5) <> " compressão com < 2% erro                        ║")
-  io.println("║  └── 36x menos área de silício que FP32                          ║")
-  io.println("║                                                                  ║")
-  io.println("║  Pure Gleam pode competir com hardware dedicado!                 ║")
-  io.println("╚══════════════════════════════════════════════════════════════════╝")
+  io.println(
+    "\n╔══════════════════════════════════════════════════════════════════╗",
+  )
+  io.println(
+    "║  CONCLUSÃO:                                                      ║",
+  )
+  io.println(
+    "║                                                                  ║",
+  )
+  io.println(
+    "║  NVFP4 Compression (Blackwell Style):                            ║",
+  )
+  io.println(
+    "║  ├── Micro-blocks de 16 valores                                  ║",
+  )
+  io.println(
+    "║  ├── Two-level scaling (local + global)                          ║",
+  )
+  io.println(
+    "║  ├── "
+    <> pad_right(float_to_string(stats_q4.compression_ratio) <> "x", 5)
+    <> " compressão com < 2% erro                        ║",
+  )
+  io.println(
+    "║  └── 36x menos área de silício que FP32                          ║",
+  )
+  io.println(
+    "║                                                                  ║",
+  )
+  io.println(
+    "║  Pure Gleam pode competir com hardware dedicado!                 ║",
+  )
+  io.println(
+    "╚══════════════════════════════════════════════════════════════════╝",
+  )
 }
 
 // ============================================================================
@@ -612,24 +702,26 @@ fn find_max_abs(data: List(Float)) -> Float {
 fn find_max(data: List(Float)) -> Float {
   case data {
     [] -> 0.0
-    [first, ..rest] -> list.fold(rest, first, fn(acc, v) {
-      case v >. acc {
-        True -> v
-        False -> acc
-      }
-    })
+    [first, ..rest] ->
+      list.fold(rest, first, fn(acc, v) {
+        case v >. acc {
+          True -> v
+          False -> acc
+        }
+      })
   }
 }
 
 fn find_min(data: List(Float)) -> Float {
   case data {
     [] -> 0.0
-    [first, ..rest] -> list.fold(rest, first, fn(acc, v) {
-      case v <. acc {
-        True -> v
-        False -> acc
-      }
-    })
+    [first, ..rest] ->
+      list.fold(rest, first, fn(acc, v) {
+        case v <. acc {
+          True -> v
+          False -> acc
+        }
+      })
   }
 }
 

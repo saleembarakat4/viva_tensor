@@ -124,11 +124,12 @@ pub fn quantize_int8(t: Tensor) -> CompressedTensor {
   }
 
   // Quantiza para INT8 (-127 a 127)
-  let quantized = list.map(data, fn(v) {
-    let scaled = v *. scale
-    let clamped = float.clamp(scaled, -127.0, 127.0)
-    float.round(clamped)
-  })
+  let quantized =
+    list.map(data, fn(v) {
+      let scaled = v *. scale
+      let clamped = float.clamp(scaled, -127.0, 127.0)
+      float.round(clamped)
+    })
 
   // Calcula memória: 1 byte por valor + 4 bytes para escala
   let num_elements = list.fold(shape, 1, fn(acc, dim) { acc * dim })
@@ -151,25 +152,29 @@ pub fn quantize_q4(t: Tensor, block_size: Int) -> CompressedTensor {
   let blocks = list.sized_chunk(data, block_size)
 
   // Quantiza cada bloco
-  let #(quantized_blocks, scales) = list.fold(blocks, #([], []), fn(acc, block) {
-    let #(q_acc, s_acc) = acc
+  let #(quantized_blocks, scales) =
+    list.fold(blocks, #([], []), fn(acc, block) {
+      let #(q_acc, s_acc) = acc
 
-    // Escala do bloco
-    let block_max = find_max_abs(block)
-    let scale = case block_max >. 0.0 {
-      True -> 15.0 /. block_max  // Q4 usa 0-15
-      False -> 1.0
-    }
+      // Escala do bloco
+      let block_max = find_max_abs(block)
+      let scale = case block_max >. 0.0 {
+        True -> 15.0 /. block_max
+        // Q4 usa 0-15
+        False -> 1.0
+      }
 
-    // Quantiza para 4 bits (0-15)
-    let q_block = list.map(block, fn(v) {
-      let scaled = { v *. scale } +. 8.0  // Offset para unsigned
-      let clamped = float.clamp(scaled, 0.0, 15.0)
-      float.round(clamped)
+      // Quantiza para 4 bits (0-15)
+      let q_block =
+        list.map(block, fn(v) {
+          let scaled = { v *. scale } +. 8.0
+          // Offset para unsigned
+          let clamped = float.clamp(scaled, 0.0, 15.0)
+          float.round(clamped)
+        })
+
+      #(list.append(q_acc, q_block), [scale, ..s_acc])
     })
-
-    #(list.append(q_acc, q_block), [scale, ..s_acc])
-  })
 
   // Memória: 4 bits por valor + 4 bytes por bloco para escala
   let num_elements = list.fold(shape, 1, fn(acc, dim) { acc * dim })
@@ -199,34 +204,32 @@ pub fn dequantize(ct: CompressedTensor) -> Tensor {
 
     Int8(scale) -> {
       // INT8 → FP32
-      let data = list.map(ct.data, fn(q) {
-        int.to_float(q) /. scale
-      })
+      let data = list.map(ct.data, fn(q) { int.to_float(q) /. scale })
       create_tensor(data, ct.shape)
     }
 
     Quant4(block_size, scales) -> {
       // Q4 → FP32
       let blocks = list.sized_chunk(ct.data, block_size)
-      let data = list.index_map(blocks, fn(block, idx) {
-        let scale = get_at_index(scales, idx, 1.0)
-        list.map(block, fn(q) {
-          { int.to_float(q) -. 8.0 } /. scale
+      let data =
+        list.index_map(blocks, fn(block, idx) {
+          let scale = get_at_index(scales, idx, 1.0)
+          list.map(block, fn(q) { { int.to_float(q) -. 8.0 } /. scale })
         })
-      }) |> list.flatten
+        |> list.flatten
       create_tensor(data, ct.shape)
     }
 
     Quant4Min(block_size, scales, mins) -> {
       // Q4Min → FP32 (com min)
       let blocks = list.sized_chunk(ct.data, block_size)
-      let data = list.index_map(blocks, fn(block, idx) {
-        let scale = get_at_index(scales, idx, 1.0)
-        let min = get_at_index(mins, idx, 0.0)
-        list.map(block, fn(q) {
-          { int.to_float(q) /. scale } +. min
+      let data =
+        list.index_map(blocks, fn(block, idx) {
+          let scale = get_at_index(scales, idx, 1.0)
+          let min = get_at_index(mins, idx, 0.0)
+          list.map(block, fn(q) { { int.to_float(q) /. scale } +. min })
         })
-      }) |> list.flatten
+        |> list.flatten
       create_tensor(data, ct.shape)
     }
   }
@@ -255,34 +258,43 @@ pub fn create_memory_hierarchy(
   ram_gb: Float,
   disk_path: Option(String),
 ) -> MemoryHierarchy {
-  let gpu_tier = MemoryTier(
-    location: OnGpu(0),
-    capacity_gb: vram_gb,
-    used_gb: 0.0,
-    bandwidth_gbps: 1008.0,  // RTX 4090 bandwidth
-  )
+  let gpu_tier =
+    MemoryTier(
+      location: OnGpu(0),
+      capacity_gb: vram_gb,
+      used_gb: 0.0,
+      bandwidth_gbps: 1008.0,
+      // RTX 4090 bandwidth
+    )
 
-  let ram_tier = MemoryTier(
-    location: OnRam,
-    capacity_gb: ram_gb,
-    used_gb: 0.0,
-    bandwidth_gbps: 51.2,  // DDR5-3200 dual channel
-  )
+  let ram_tier =
+    MemoryTier(
+      location: OnRam,
+      capacity_gb: ram_gb,
+      used_gb: 0.0,
+      bandwidth_gbps: 51.2,
+      // DDR5-3200 dual channel
+    )
 
   let disk_tier = case disk_path {
-    Some(path) -> Some(MemoryTier(
-      location: OnDisk(path),
-      capacity_gb: 1000.0,  // Assume 1TB
-      used_gb: 0.0,
-      bandwidth_gbps: 7.0,  // NVMe SSD
-    ))
+    Some(path) ->
+      Some(MemoryTier(
+        location: OnDisk(path),
+        capacity_gb: 1000.0,
+        // Assume 1TB
+        used_gb: 0.0,
+        bandwidth_gbps: 7.0,
+        // NVMe SSD
+      ))
     None -> None
   }
 
   // Com INT8: GPU efetiva = 4x, RAM efetiva = 4x
   let effective = {
-    { vram_gb *. 4.0 } +.  // INT8 na GPU
-    { ram_gb *. 4.0 }       // INT8 offload para RAM
+    { vram_gb *. 4.0 }
+    // INT8 na GPU
+    +. { ram_gb *. 4.0 }
+    // INT8 offload para RAM
   }
 
   MemoryHierarchy(
@@ -305,18 +317,20 @@ pub fn allocate_tensor(
       let gpu_free = hierarchy.gpu.capacity_gb -. hierarchy.gpu.used_gb
       case tensor_size_gb <=. gpu_free {
         True -> {
-          let new_gpu = MemoryTier(
-            ..hierarchy.gpu,
-            used_gb: hierarchy.gpu.used_gb +. tensor_size_gb,
-          )
+          let new_gpu =
+            MemoryTier(
+              ..hierarchy.gpu,
+              used_gb: hierarchy.gpu.used_gb +. tensor_size_gb,
+            )
           #(OnGpu(0), MemoryHierarchy(..hierarchy, gpu: new_gpu))
         }
         False -> {
           // Overflow para RAM
-          let new_ram = MemoryTier(
-            ..hierarchy.ram,
-            used_gb: hierarchy.ram.used_gb +. tensor_size_gb,
-          )
+          let new_ram =
+            MemoryTier(
+              ..hierarchy.ram,
+              used_gb: hierarchy.ram.used_gb +. tensor_size_gb,
+            )
           #(OnRam, MemoryHierarchy(..hierarchy, ram: new_ram))
         }
       }
@@ -326,17 +340,19 @@ pub fn allocate_tensor(
       let gpu_usage = hierarchy.gpu.used_gb /. hierarchy.gpu.capacity_gb
       case gpu_usage <. threshold {
         True -> {
-          let new_gpu = MemoryTier(
-            ..hierarchy.gpu,
-            used_gb: hierarchy.gpu.used_gb +. tensor_size_gb,
-          )
+          let new_gpu =
+            MemoryTier(
+              ..hierarchy.gpu,
+              used_gb: hierarchy.gpu.used_gb +. tensor_size_gb,
+            )
           #(OnGpu(0), MemoryHierarchy(..hierarchy, gpu: new_gpu))
         }
         False -> {
-          let new_ram = MemoryTier(
-            ..hierarchy.ram,
-            used_gb: hierarchy.ram.used_gb +. tensor_size_gb,
-          )
+          let new_ram =
+            MemoryTier(
+              ..hierarchy.ram,
+              used_gb: hierarchy.ram.used_gb +. tensor_size_gb,
+            )
           #(OnRam, MemoryHierarchy(..hierarchy, ram: new_ram))
         }
       }
@@ -348,19 +364,21 @@ pub fn allocate_tensor(
 
       case tensor_size_gb <=. gpu_free {
         True -> {
-          let new_gpu = MemoryTier(
-            ..hierarchy.gpu,
-            used_gb: hierarchy.gpu.used_gb +. tensor_size_gb,
-          )
+          let new_gpu =
+            MemoryTier(
+              ..hierarchy.gpu,
+              used_gb: hierarchy.gpu.used_gb +. tensor_size_gb,
+            )
           #(OnGpu(0), MemoryHierarchy(..hierarchy, gpu: new_gpu))
         }
         False -> {
           case ram_usage <. ram_threshold {
             True -> {
-              let new_ram = MemoryTier(
-                ..hierarchy.ram,
-                used_gb: hierarchy.ram.used_gb +. tensor_size_gb,
-              )
+              let new_ram =
+                MemoryTier(
+                  ..hierarchy.ram,
+                  used_gb: hierarchy.ram.used_gb +. tensor_size_gb,
+                )
               #(OnRam, MemoryHierarchy(..hierarchy, ram: new_ram))
             }
             False -> {
@@ -425,7 +443,8 @@ pub fn checkpoint_savings(
 
     LargeLayersOnly(threshold) -> {
       case layer_size_mb >. threshold {
-        True -> total_mb *. 0.7  // ~70% economia
+        True -> total_mb *. 0.7
+        // ~70% economia
         False -> 0.0
       }
     }
@@ -478,11 +497,10 @@ pub fn create_streamed(shape: List(Int), chunk_dim: Int) -> StreamedTensor {
 /// Carrega um chunk específico
 pub fn load_chunk(st: StreamedTensor, chunk_idx: Int) -> StreamedTensor {
   case list.contains(st.loaded_chunks, chunk_idx) {
-    True -> st  // Já carregado
-    False -> StreamedTensor(
-      ..st,
-      loaded_chunks: [chunk_idx, ..st.loaded_chunks],
-    )
+    True -> st
+    // Já carregado
+    False ->
+      StreamedTensor(..st, loaded_chunks: [chunk_idx, ..st.loaded_chunks])
   }
 }
 
@@ -502,7 +520,8 @@ pub fn unload_chunk(st: StreamedTensor, chunk_idx: Int) -> StreamedTensor {
 pub type MemoryPool {
   MemoryPool(
     /// Buffers disponíveis por tamanho
-    free_buffers: List(#(Int, Int)),  // (size, count)
+    free_buffers: List(#(Int, Int)),
+    // (size, count)
     /// Buffers em uso
     used_buffers: Int,
     /// Total alocado em bytes
@@ -512,55 +531,63 @@ pub type MemoryPool {
 
 /// Cria pool de memória
 pub fn create_pool() -> MemoryPool {
-  MemoryPool(
-    free_buffers: [],
-    used_buffers: 0,
-    total_allocated: 0,
-  )
+  MemoryPool(free_buffers: [], used_buffers: 0, total_allocated: 0)
 }
 
 /// Aloca do pool (reutiliza se possível)
 pub fn pool_alloc(pool: MemoryPool, size: Int) -> #(MemoryPool, Bool) {
   // Procura buffer do tamanho certo
-  let found = list.find(pool.free_buffers, fn(b) {
-    let #(s, count) = b
-    s == size && count > 0
-  })
+  let found =
+    list.find(pool.free_buffers, fn(b) {
+      let #(s, count) = b
+      s == size && count > 0
+    })
 
   case found {
     Ok(#(s, _count)) -> {
       // Reutiliza buffer existente
-      let new_buffers = list.map(pool.free_buffers, fn(b) {
-        let #(bs, bc) = b
-        case bs == s {
-          True -> #(bs, bc - 1)
-          False -> b
-        }
-      })
-      #(MemoryPool(
-        ..pool,
-        free_buffers: new_buffers,
-        used_buffers: pool.used_buffers + 1,
-      ), True)  // True = reused
+      let new_buffers =
+        list.map(pool.free_buffers, fn(b) {
+          let #(bs, bc) = b
+          case bs == s {
+            True -> #(bs, bc - 1)
+            False -> b
+          }
+        })
+      #(
+        MemoryPool(
+          ..pool,
+          free_buffers: new_buffers,
+          used_buffers: pool.used_buffers + 1,
+        ),
+        True,
+      )
+      // True = reused
     }
     Error(_) -> {
       // Aloca novo buffer
       let new_buffers = [#(size, 0), ..pool.free_buffers]
-      #(MemoryPool(
-        free_buffers: new_buffers,
-        used_buffers: pool.used_buffers + 1,
-        total_allocated: pool.total_allocated + size,
-      ), False)  // False = newly allocated
+      #(
+        MemoryPool(
+          free_buffers: new_buffers,
+          used_buffers: pool.used_buffers + 1,
+          total_allocated: pool.total_allocated + size,
+        ),
+        False,
+      )
+      // False = newly allocated
     }
   }
 }
 
 /// Devolve buffer ao pool
 pub fn pool_free(pool: MemoryPool, size: Int) -> MemoryPool {
-  let new_buffers = case list.find(pool.free_buffers, fn(b) {
-    let #(s, _) = b
-    s == size
-  }) {
+  let new_buffers = case
+    list.find(pool.free_buffers, fn(b) {
+      let #(s, _) = b
+      s == size
+    })
+  {
     Ok(_) -> {
       list.map(pool.free_buffers, fn(b) {
         let #(bs, bc) = b
@@ -589,9 +616,15 @@ pub fn main() {
 }
 
 pub fn demonstrate_compression() {
-  io.println("╔══════════════════════════════════════════════════════════════════╗")
-  io.println("║  COMPRESSION SYSTEM - Faz 24GB VRAM virar 80GB+ efetivo!        ║")
-  io.println("╚══════════════════════════════════════════════════════════════════╝\n")
+  io.println(
+    "╔══════════════════════════════════════════════════════════════════╗",
+  )
+  io.println(
+    "║  COMPRESSION SYSTEM - Faz 24GB VRAM virar 80GB+ efetivo!        ║",
+  )
+  io.println(
+    "╚══════════════════════════════════════════════════════════════════╝\n",
+  )
 
   // Simula configuração RTX 4090 + 32GB RAM
   let hierarchy = create_memory_hierarchy(24.0, 32.0, None)
@@ -600,20 +633,34 @@ pub fn demonstrate_compression() {
   io.println("  GPU: 24GB VRAM (RTX 4090)")
   io.println("  RAM: 32GB DDR5")
   io.println("  Total físico: 56GB")
-  io.println("  Total EFETIVO: " <> float_to_string(hierarchy.total_effective_gb) <> "GB")
+  io.println(
+    "  Total EFETIVO: " <> float_to_string(hierarchy.total_effective_gb) <> "GB",
+  )
   io.println("")
 
   // Demonstra quantização
   io.println("━━━ QUANTIZAÇÃO ━━━")
-  let t = tensor.random_uniform([1024, 512])  // ~2MB em FP32
-  let original_size = 1024 * 512 * 4  // 4 bytes por float
+  let t = tensor.random_uniform([1024, 512])
+  // ~2MB em FP32
+  let original_size = 1024 * 512 * 4
+  // 4 bytes por float
 
   let int8 = quantize_int8(t)
   let q4 = quantize_q4(t, 32)
 
-  io.println("  Tensor original: " <> int.to_string(original_size / 1024) <> "KB (FP32)")
-  io.println("  INT8:            " <> int.to_string(int8.memory_bytes / 1024) <> "KB (4x menor)")
-  io.println("  Q4:              " <> int.to_string(q4.memory_bytes / 1024) <> "KB (8x menor)")
+  io.println(
+    "  Tensor original: " <> int.to_string(original_size / 1024) <> "KB (FP32)",
+  )
+  io.println(
+    "  INT8:            "
+    <> int.to_string(int8.memory_bytes / 1024)
+    <> "KB (4x menor)",
+  )
+  io.println(
+    "  Q4:              "
+    <> int.to_string(q4.memory_bytes / 1024)
+    <> "KB (8x menor)",
+  )
 
   // Verifica precisão
   let restored = dequantize(int8)
@@ -628,7 +675,8 @@ pub fn demonstrate_compression() {
 
   // Demonstra alocação
   io.println("\n━━━ ALOCAÇÃO INTELIGENTE ━━━")
-  let policy = OffloadToRam(0.8)  // Offload quando GPU > 80%
+  let policy = OffloadToRam(0.8)
+  // Offload quando GPU > 80%
 
   // Simula alocações
   let #(loc1, h1) = allocate_tensor(hierarchy, 10.0, policy)
@@ -642,8 +690,10 @@ pub fn demonstrate_compression() {
 
   // Demonstra checkpointing
   io.println("\n━━━ GRADIENT CHECKPOINTING ━━━")
-  let layers = 24  // Típico transformer
-  let layer_mb = 100.0  // 100MB por camada
+  let layers = 24
+  // Típico transformer
+  let layer_mb = 100.0
+  // 100MB por camada
   let total_mb = int.to_float(layers) *. layer_mb
 
   let savings_n2 = checkpoint_savings(layers, layer_mb, EveryN(2))
@@ -651,21 +701,61 @@ pub fn demonstrate_compression() {
   let savings_adaptive = checkpoint_savings(layers, layer_mb, Adaptive(0.6))
 
   io.println("  Sem checkpoint: " <> float_to_string(total_mb) <> "MB")
-  io.println("  EveryN(2):      " <> float_to_string(total_mb -. savings_n2) <> "MB (-" <> float_to_string(savings_n2) <> "MB)")
-  io.println("  EveryN(4):      " <> float_to_string(total_mb -. savings_n4) <> "MB (-" <> float_to_string(savings_n4) <> "MB)")
-  io.println("  Adaptive(0.6):  " <> float_to_string(total_mb -. savings_adaptive) <> "MB (-" <> float_to_string(savings_adaptive) <> "MB)")
+  io.println(
+    "  EveryN(2):      "
+    <> float_to_string(total_mb -. savings_n2)
+    <> "MB (-"
+    <> float_to_string(savings_n2)
+    <> "MB)",
+  )
+  io.println(
+    "  EveryN(4):      "
+    <> float_to_string(total_mb -. savings_n4)
+    <> "MB (-"
+    <> float_to_string(savings_n4)
+    <> "MB)",
+  )
+  io.println(
+    "  Adaptive(0.6):  "
+    <> float_to_string(total_mb -. savings_adaptive)
+    <> "MB (-"
+    <> float_to_string(savings_adaptive)
+    <> "MB)",
+  )
 
-  io.println("\n╔══════════════════════════════════════════════════════════════════╗")
-  io.println("║  CONCLUSÃO:                                                      ║")
-  io.println("║                                                                  ║")
-  io.println("║  Sistema com 24GB VRAM + 32GB RAM:                               ║")
-  io.println("║  ├── INT8 quantization:      4x multiplicador                    ║")
-  io.println("║  ├── RAM offloading:         +32GB extensão                      ║")
-  io.println("║  ├── Gradient checkpoint:    50-75% menos memória                ║")
-  io.println("║  └── Memory pooling:         Zero fragmentação                   ║")
-  io.println("║                                                                  ║")
-  io.println("║  RESULTADO: ~224GB efetivo de 56GB físico (4x)!                  ║")
-  io.println("╚══════════════════════════════════════════════════════════════════╝")
+  io.println(
+    "\n╔══════════════════════════════════════════════════════════════════╗",
+  )
+  io.println(
+    "║  CONCLUSÃO:                                                      ║",
+  )
+  io.println(
+    "║                                                                  ║",
+  )
+  io.println(
+    "║  Sistema com 24GB VRAM + 32GB RAM:                               ║",
+  )
+  io.println(
+    "║  ├── INT8 quantization:      4x multiplicador                    ║",
+  )
+  io.println(
+    "║  ├── RAM offloading:         +32GB extensão                      ║",
+  )
+  io.println(
+    "║  ├── Gradient checkpoint:    50-75% menos memória                ║",
+  )
+  io.println(
+    "║  └── Memory pooling:         Zero fragmentação                   ║",
+  )
+  io.println(
+    "║                                                                  ║",
+  )
+  io.println(
+    "║  RESULTADO: ~224GB efetivo de 56GB físico (4x)!                  ║",
+  )
+  io.println(
+    "╚══════════════════════════════════════════════════════════════════╝",
+  )
 }
 
 // ============================================================================
@@ -686,16 +776,13 @@ fn compute_quantization_error(original: Tensor, restored: Tensor) -> Float {
   let orig_data = tensor.to_list(original)
   let rest_data = tensor.to_list(restored)
 
-  let #(sum_error, count) = list.fold(
-    list.zip(orig_data, rest_data),
-    #(0.0, 0),
-    fn(acc, pair) {
+  let #(sum_error, count) =
+    list.fold(list.zip(orig_data, rest_data), #(0.0, 0), fn(acc, pair) {
       let #(sum, cnt) = acc
       let #(o, r) = pair
       let error = float.absolute_value(o -. r)
       #(sum +. error, cnt + 1)
-    }
-  )
+    })
 
   case count > 0 {
     True -> sum_error /. int.to_float(count)

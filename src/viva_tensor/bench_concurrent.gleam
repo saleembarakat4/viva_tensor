@@ -12,11 +12,19 @@ import gleam/list
 import viva_tensor/tensor
 
 pub fn main() {
-  io.println("╔══════════════════════════════════════════════════════════════════╗")
-  io.println("║  CONCURRENCY BENCHMARK - Onde BEAM/Gleam BRILHA vs C/C++        ║")
-  io.println("╚══════════════════════════════════════════════════════════════════╝\n")
+  io.println(
+    "╔══════════════════════════════════════════════════════════════════╗",
+  )
+  io.println(
+    "║  CONCURRENCY BENCHMARK - Onde BEAM/Gleam BRILHA vs C/C++        ║",
+  )
+  io.println(
+    "╚══════════════════════════════════════════════════════════════════╝\n",
+  )
 
-  io.println("C/C++ libs (Eigen, OpenBLAS, MKL) são rápidas em single-thread...")
+  io.println(
+    "C/C++ libs (Eigen, OpenBLAS, MKL) são rápidas em single-thread...",
+  )
   io.println("Mas quantos tensors você processa em PARALELO? 🤔\n")
 
   // Test 1: Parallel tensor creation
@@ -35,10 +43,18 @@ pub fn main() {
   io.println("\n━━━ TEST 4: BEAM Process Spawning ━━━")
   bench_process_spawning()
 
-  io.println("\n╔══════════════════════════════════════════════════════════════════╗")
-  io.println("║  CONCLUSÃO: BEAM escala horizontalmente, C/C++ escala vertical  ║")
-  io.println("║  Para ML inference em produção: Gleam + Rust NIF = 🔥           ║")
-  io.println("╚══════════════════════════════════════════════════════════════════╝")
+  io.println(
+    "\n╔══════════════════════════════════════════════════════════════════╗",
+  )
+  io.println(
+    "║  CONCLUSÃO: BEAM escala horizontalmente, C/C++ escala vertical  ║",
+  )
+  io.println(
+    "║  Para ML inference em produção: Gleam + Rust NIF = 🔥           ║",
+  )
+  io.println(
+    "╚══════════════════════════════════════════════════════════════════╝",
+  )
 }
 
 fn bench_parallel_creation() {
@@ -46,24 +62,26 @@ fn bench_parallel_creation() {
 
   list.each(counts, fn(n) {
     // Sequential
-    let #(seq_time, _) = timer_tc(fn() {
-      list.range(1, n)
-      |> list.map(fn(_) { tensor.random_uniform([100]) })
-    })
+    let #(seq_time, _) =
+      timer_tc(fn() {
+        list.range(1, n)
+        |> list.map(fn(_) { tensor.random_uniform([100]) })
+      })
 
     // Parallel using erlang:spawn and collect
-    let #(par_time, _) = timer_tc(fn() {
-      let parent = erlang_self()
-      list.range(1, n)
-      |> list.each(fn(_) {
-        erlang_spawn(fn() {
-          let result = tensor.random_uniform([100])
-          erlang_send(parent, result)
+    let #(par_time, _) =
+      timer_tc(fn() {
+        let parent = erlang_self()
+        list.range(1, n)
+        |> list.each(fn(_) {
+          erlang_spawn(fn() {
+            let result = tensor.random_uniform([100])
+            erlang_send(parent, result)
+          })
         })
+        // Collect results
+        collect_n(n)
       })
-      // Collect results
-      collect_n(n)
-    })
 
     let speedup = case par_time > 0 {
       True -> int.to_float(seq_time) /. int.to_float(par_time)
@@ -91,21 +109,21 @@ fn bench_parallel_reductions() {
     |> list.map(fn(_) { tensor.random_uniform([1000]) })
 
   // Sequential sum of all
-  let #(seq_time, _) = timer_tc(fn() {
-    list.map(tensors, fn(t) { tensor.sum(t) })
-  })
+  let #(seq_time, _) =
+    timer_tc(fn() { list.map(tensors, fn(t) { tensor.sum(t) }) })
 
   // Parallel sum
-  let #(par_time, _) = timer_tc(fn() {
-    let parent = erlang_self()
-    list.each(tensors, fn(t) {
-      erlang_spawn(fn() {
-        let result = tensor.sum(t)
-        erlang_send(parent, result)
+  let #(par_time, _) =
+    timer_tc(fn() {
+      let parent = erlang_self()
+      list.each(tensors, fn(t) {
+        erlang_spawn(fn() {
+          let result = tensor.sum(t)
+          erlang_send(parent, result)
+        })
       })
+      collect_n(1000)
     })
-    collect_n(1000)
-  })
 
   let speedup = case par_time > 0 {
     True -> int.to_float(seq_time) /. int.to_float(par_time)
@@ -133,24 +151,24 @@ fn bench_parallel_similarity() {
   io.println("  Query vs 10K documents (512d embeddings):")
 
   // Sequential
-  let #(seq_time, _) = timer_tc(fn() {
-    list.map(documents, fn(doc) { tensor.dot(query, doc) })
-  })
+  let #(seq_time, _) =
+    timer_tc(fn() { list.map(documents, fn(doc) { tensor.dot(query, doc) }) })
 
   // Parallel batched (chunks of 100)
-  let #(par_time, _) = timer_tc(fn() {
-    let parent = erlang_self()
-    let chunks = list.sized_chunk(documents, 100)
-    let num_chunks = list.length(chunks)
+  let #(par_time, _) =
+    timer_tc(fn() {
+      let parent = erlang_self()
+      let chunks = list.sized_chunk(documents, 100)
+      let num_chunks = list.length(chunks)
 
-    list.each(chunks, fn(chunk) {
-      erlang_spawn(fn() {
-        let results = list.map(chunk, fn(doc) { tensor.dot(query, doc) })
-        erlang_send(parent, results)
+      list.each(chunks, fn(chunk) {
+        erlang_spawn(fn() {
+          let results = list.map(chunk, fn(doc) { tensor.dot(query, doc) })
+          erlang_send(parent, results)
+        })
       })
+      collect_n(num_chunks)
     })
-    collect_n(num_chunks)
-  })
 
   let speedup = case par_time > 0 {
     True -> int.to_float(seq_time) /. int.to_float(par_time)
@@ -162,11 +180,7 @@ fn bench_parallel_similarity() {
     False -> 0.0
   }
 
-  io.println(
-    "    Sequential: "
-    <> int.to_string(seq_time / 1000)
-    <> "ms",
-  )
+  io.println("    Sequential: " <> int.to_string(seq_time / 1000) <> "ms")
   io.println(
     "    Parallel:   "
     <> int.to_string(par_time / 1000)
@@ -175,9 +189,7 @@ fn bench_parallel_similarity() {
     <> "x)",
   )
   io.println(
-    "    Throughput: "
-    <> float_to_string(throughput)
-    <> " queries/sec",
+    "    Throughput: " <> float_to_string(throughput) <> " queries/sec",
   )
 }
 
@@ -187,16 +199,13 @@ fn bench_process_spawning() {
   let counts = [1000, 10_000, 100_000]
 
   list.each(counts, fn(n) {
-    let #(time, _) = timer_tc(fn() {
-      let parent = erlang_self()
-      list.range(1, n)
-      |> list.each(fn(_) {
-        erlang_spawn(fn() {
-          erlang_send(parent, 1)
-        })
+    let #(time, _) =
+      timer_tc(fn() {
+        let parent = erlang_self()
+        list.range(1, n)
+        |> list.each(fn(_) { erlang_spawn(fn() { erlang_send(parent, 1) }) })
+        collect_n(n)
       })
-      collect_n(n)
-    })
 
     let spawns_per_sec = case time > 0 {
       True -> int.to_float(n) /. { int.to_float(time) /. 1_000_000.0 }
@@ -215,8 +224,12 @@ fn bench_process_spawning() {
   })
 
   io.println("")
-  io.println("  💡 Em C/C++ você precisaria de pthreads, mutex, condition vars...")
-  io.println("  💡 Em Gleam: erlang_spawn() e pronto! Zero data races garantido.")
+  io.println(
+    "  💡 Em C/C++ você precisaria de pthreads, mutex, condition vars...",
+  )
+  io.println(
+    "  💡 Em Gleam: erlang_spawn() e pronto! Zero data races garantido.",
+  )
 }
 
 // FFI - Direct Erlang calls

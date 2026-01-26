@@ -138,14 +138,19 @@ fn get_default_batch_size(device: Device) -> Int {
 }
 
 /// Registra resultado de execução e otimiza
-pub fn profile(tuner: AutoTuner, batch_size: Int, duration_ms: Float) -> AutoTuner {
+pub fn profile(
+  tuner: AutoTuner,
+  batch_size: Int,
+  duration_ms: Float,
+) -> AutoTuner {
   let throughput = int.to_float(batch_size) /. duration_ms
 
-  let result = BatchResult(
-    batch_size: batch_size,
-    duration_ms: duration_ms,
-    throughput: throughput,
-  )
+  let result =
+    BatchResult(
+      batch_size: batch_size,
+      duration_ms: duration_ms,
+      throughput: throughput,
+    )
 
   // Adiciona ao histórico (mantém últimos 20)
   let new_history = case list.length(tuner.history) >= 20 {
@@ -156,15 +161,14 @@ pub fn profile(tuner: AutoTuner, batch_size: Int, duration_ms: Float) -> AutoTun
   // Encontra batch size ótimo
   let optimal = find_optimal_batch_size(new_history, tuner.hardware)
 
-  AutoTuner(
-    ..tuner,
-    history: new_history,
-    current_batch_size: optimal,
-  )
+  AutoTuner(..tuner, history: new_history, current_batch_size: optimal)
 }
 
 /// Encontra batch size com maior throughput
-fn find_optimal_batch_size(history: List(BatchResult), hw: HardwareProfile) -> Int {
+fn find_optimal_batch_size(
+  history: List(BatchResult),
+  hw: HardwareProfile,
+) -> Int {
   case history {
     [] -> get_default_batch_size(hw.device)
     _ -> {
@@ -188,8 +192,7 @@ fn find_optimal_batch_size(history: List(BatchResult), hw: HardwareProfile) -> I
 fn adjust_for_memory(batch_size: Int, hw: HardwareProfile) -> Int {
   let tensor_size_mb = 2.0
   // ~2MB por tensor 512d fp32
-  let batch_memory_gb =
-    int.to_float(batch_size) *. tensor_size_mb /. 1024.0
+  let batch_memory_gb = int.to_float(batch_size) *. tensor_size_mb /. 1024.0
 
   // Deixa 20% de headroom
   let max_memory = hw.available_vram_gb *. 0.8
@@ -263,26 +266,30 @@ pub type MemoryPressure {
 /// Estratégia baseada em pressão de memória
 pub fn get_memory_strategy(pressure: MemoryPressure) -> MemoryStrategy {
   case pressure {
-    Critical -> MemoryStrategy(
-      batch_size_mult: 0.25,
-      quant_mode: Inference,
-      gc_aggressive: True,
-    )
-    High -> MemoryStrategy(
-      batch_size_mult: 0.5,
-      quant_mode: Inference,
-      gc_aggressive: True,
-    )
-    Medium -> MemoryStrategy(
-      batch_size_mult: 0.75,
-      quant_mode: Adaptive,
-      gc_aggressive: False,
-    )
-    Low -> MemoryStrategy(
-      batch_size_mult: 1.0,
-      quant_mode: Training,
-      gc_aggressive: False,
-    )
+    Critical ->
+      MemoryStrategy(
+        batch_size_mult: 0.25,
+        quant_mode: Inference,
+        gc_aggressive: True,
+      )
+    High ->
+      MemoryStrategy(
+        batch_size_mult: 0.5,
+        quant_mode: Inference,
+        gc_aggressive: True,
+      )
+    Medium ->
+      MemoryStrategy(
+        batch_size_mult: 0.75,
+        quant_mode: Adaptive,
+        gc_aggressive: False,
+      )
+    Low ->
+      MemoryStrategy(
+        batch_size_mult: 1.0,
+        quant_mode: Training,
+        gc_aggressive: False,
+      )
   }
 }
 
@@ -300,16 +307,24 @@ pub type MemoryStrategy {
 
 /// Roda profile completo do hardware
 pub fn run_hardware_profile() {
-  io.println("╔══════════════════════════════════════════════════════════════════╗")
-  io.println("║  AUTO-TUNE HARDWARE PROFILE                                     ║")
-  io.println("╚══════════════════════════════════════════════════════════════════╝\n")
+  io.println(
+    "╔══════════════════════════════════════════════════════════════════╗",
+  )
+  io.println(
+    "║  AUTO-TUNE HARDWARE PROFILE                                     ║",
+  )
+  io.println(
+    "╚══════════════════════════════════════════════════════════════════╝\n",
+  )
 
   let hw = detect_hardware()
 
   io.println("HARDWARE DETECTADO:")
   print_device(hw.device)
   io.println("  VRAM Total: " <> float_to_string(hw.total_vram_gb) <> " GB")
-  io.println("  VRAM Disponível: " <> float_to_string(hw.available_vram_gb) <> " GB")
+  io.println(
+    "  VRAM Disponível: " <> float_to_string(hw.available_vram_gb) <> " GB",
+  )
   io.println("  RAM Total: " <> float_to_string(hw.total_ram_gb) <> " GB")
   io.println("  GPU Load: " <> float_to_string(hw.gpu_load_pct) <> "%")
   io.println("  Batch Size Ótimo: " <> int.to_string(hw.optimal_batch_size))
@@ -323,14 +338,30 @@ pub fn run_hardware_profile() {
   io.println("  Quant Mode: " <> quant_mode_to_string(strategy.quant_mode))
   io.println("  GC Agressivo: " <> bool_to_string(strategy.gc_aggressive))
 
-  io.println("\n╔══════════════════════════════════════════════════════════════════╗")
-  io.println("║  RECOMENDAÇÕES PARA RTX 4090 24GB + 32GB RAM:                   ║")
-  io.println("║                                                                  ║")
-  io.println("║  1. Batch Size: 64 (pode ir até 128 com INT8)                   ║")
-  io.println("║  2. Quantização: INT8 para inference (4x menos VRAM)            ║")
-  io.println("║  3. Memory Pool: Pre-alocar 20GB para tensores                  ║")
-  io.println("║  4. Zero-Copy: Usar Binary refs entre Gleam e Rust              ║")
-  io.println("╚══════════════════════════════════════════════════════════════════╝")
+  io.println(
+    "\n╔══════════════════════════════════════════════════════════════════╗",
+  )
+  io.println(
+    "║  RECOMENDAÇÕES PARA RTX 4090 24GB + 32GB RAM:                   ║",
+  )
+  io.println(
+    "║                                                                  ║",
+  )
+  io.println(
+    "║  1. Batch Size: 64 (pode ir até 128 com INT8)                   ║",
+  )
+  io.println(
+    "║  2. Quantização: INT8 para inference (4x menos VRAM)            ║",
+  )
+  io.println(
+    "║  3. Memory Pool: Pre-alocar 20GB para tensores                  ║",
+  )
+  io.println(
+    "║  4. Zero-Copy: Usar Binary refs entre Gleam e Rust              ║",
+  )
+  io.println(
+    "╚══════════════════════════════════════════════════════════════════╝",
+  )
 }
 
 pub fn main() {
@@ -343,9 +374,17 @@ pub fn main() {
 
 fn print_device(device: Device) {
   case device {
-    Cuda(id, vram) -> io.println("  Device: CUDA GPU #" <> int.to_string(id) <> " (" <> float_to_string(vram) <> "GB)")
+    Cuda(id, vram) ->
+      io.println(
+        "  Device: CUDA GPU #"
+        <> int.to_string(id)
+        <> " ("
+        <> float_to_string(vram)
+        <> "GB)",
+      )
     Metal(id) -> io.println("  Device: Metal #" <> int.to_string(id))
-    Cpu(cores) -> io.println("  Device: CPU (" <> int.to_string(cores) <> " cores)")
+    Cpu(cores) ->
+      io.println("  Device: CPU (" <> int.to_string(cores) <> " cores)")
   }
 }
 

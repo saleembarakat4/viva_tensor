@@ -40,9 +40,15 @@ type GlandsConfig {
 type GlandsHandle
 
 pub fn main() {
-  io.println("╔══════════════════════════════════════════════════════════════════╗")
-  io.println("║  BENCHMARK: viva_tensor (Gleam) vs viva_glands (Rust/Candle)    ║")
-  io.println("╚══════════════════════════════════════════════════════════════════╝\n")
+  io.println(
+    "╔══════════════════════════════════════════════════════════════════╗",
+  )
+  io.println(
+    "║  BENCHMARK: viva_tensor (Gleam) vs viva_glands (Rust/Candle)    ║",
+  )
+  io.println(
+    "╚══════════════════════════════════════════════════════════════════╝\n",
+  )
 
   // Check if glands is available
   let glands_available = check_glands()
@@ -95,10 +101,11 @@ fn run_gleam_only_benchmarks() {
     let a = tensor.random_uniform([n])
     let b = tensor.random_uniform([n])
 
-    let #(time_us, _) = timer_tc(fn() {
-      let _ = tensor.dot(a, b)
-      Nil
-    })
+    let #(time_us, _) =
+      timer_tc(fn() {
+        let _ = tensor.dot(a, b)
+        Nil
+      })
 
     let ops_per_sec = case time_us > 0 {
       True -> 1_000_000.0 /. int.to_float(time_us)
@@ -130,10 +137,11 @@ fn run_gleam_only_benchmarks() {
     let times =
       list.range(1, 5)
       |> list.map(fn(_) {
-        let #(t, _) = timer_tc(fn() {
-          let _ = tensor.matmul(a, b)
-          Nil
-        })
+        let #(t, _) =
+          timer_tc(fn() {
+            let _ = tensor.matmul(a, b)
+            Nil
+          })
         t
       })
 
@@ -142,8 +150,7 @@ fn run_gleam_only_benchmarks() {
     let flops = 2 * n * n * n
     // 2*n³ for matmul
     let gflops = case avg_time > 0 {
-      True ->
-        int.to_float(flops) /. int.to_float(avg_time) /. 1000.0
+      True -> int.to_float(flops) /. int.to_float(avg_time) /. 1000.0
       // μs to GFLOPS
       False -> 0.0
     }
@@ -167,18 +174,21 @@ fn run_gleam_only_benchmarks() {
   list.each(large_sizes, fn(n) {
     let t = tensor.random_uniform([n])
 
-    let #(sum_time, _) = timer_tc(fn() {
-      let _ = tensor.sum(t)
-      Nil
-    })
-    let #(mean_time, _) = timer_tc(fn() {
-      let _ = tensor.mean(t)
-      Nil
-    })
-    let #(max_time, _) = timer_tc(fn() {
-      let _ = tensor.max(t)
-      Nil
-    })
+    let #(sum_time, _) =
+      timer_tc(fn() {
+        let _ = tensor.sum(t)
+        Nil
+      })
+    let #(mean_time, _) =
+      timer_tc(fn() {
+        let _ = tensor.mean(t)
+        Nil
+      })
+    let #(max_time, _) =
+      timer_tc(fn() {
+        let _ = tensor.max(t)
+        Nil
+      })
 
     let throughput = case sum_time > 0 {
       True -> int.to_float(n) /. int.to_float(sum_time)
@@ -202,14 +212,30 @@ fn run_gleam_only_benchmarks() {
   })
 
   // Summary
-  io.println("\n╔══════════════════════════════════════════════════════════════════╗")
-  io.println("║                    PURE GLEAM SUMMARY                            ║")
-  io.println("╠══════════════════════════════════════════════════════════════════╣")
-  io.println("║  ✅ Zero dependencies - runs anywhere BEAM runs                  ║")
-  io.println("║  ✅ Type-safe with Result types                                  ║")
-  io.println("║  ✅ Named tensors for semantic clarity                           ║")
-  io.println("║  ⚡ For GPU acceleration: use viva_glands backend                ║")
-  io.println("╚══════════════════════════════════════════════════════════════════╝")
+  io.println(
+    "\n╔══════════════════════════════════════════════════════════════════╗",
+  )
+  io.println(
+    "║                    PURE GLEAM SUMMARY                            ║",
+  )
+  io.println(
+    "╠══════════════════════════════════════════════════════════════════╣",
+  )
+  io.println(
+    "║  ✅ Zero dependencies - runs anywhere BEAM runs                  ║",
+  )
+  io.println(
+    "║  ✅ Type-safe with Result types                                  ║",
+  )
+  io.println(
+    "║  ✅ Named tensors for semantic clarity                           ║",
+  )
+  io.println(
+    "║  ⚡ For GPU acceleration: use viva_glands backend                ║",
+  )
+  io.println(
+    "╚══════════════════════════════════════════════════════════════════╝",
+  )
 }
 
 fn bench_similarity_comparative() {

@@ -2,19 +2,19 @@
 ////
 //// Roda com: gleam run -m viva_tensor/demo
 
-import gleam/io
-import gleam/int
 import gleam/float
-import gleam/string
+import gleam/int
+import gleam/io
 import gleam/list
 import gleam/result
+import gleam/string
 
-import viva_tensor/tensor.{type Tensor, Tensor}
-import viva_tensor/compression
-import viva_tensor/nf4
 import viva_tensor/awq
+import viva_tensor/compression
 import viva_tensor/flash_attention
+import viva_tensor/nf4
 import viva_tensor/sparsity
+import viva_tensor/tensor.{type Tensor, Tensor}
 
 // ============================================================================
 // MAIN
@@ -22,10 +22,18 @@ import viva_tensor/sparsity
 
 pub fn main() {
   io.println("")
-  io.println("╔═══════════════════════════════════════════════════════════════╗")
-  io.println("║          viva_tensor - Pure Gleam Tensor Library              ║")
-  io.println("║                       DEMO COMPLETA                           ║")
-  io.println("╚═══════════════════════════════════════════════════════════════╝")
+  io.println(
+    "╔═══════════════════════════════════════════════════════════════╗",
+  )
+  io.println(
+    "║          viva_tensor - Pure Gleam Tensor Library              ║",
+  )
+  io.println(
+    "║                       DEMO COMPLETA                           ║",
+  )
+  io.println(
+    "╚═══════════════════════════════════════════════════════════════╝",
+  )
   io.println("")
 
   // 1. Operações básicas
@@ -88,8 +96,12 @@ fn demo_basic_ops() {
 
   // Stats
   let random_data = tensor.random_normal([100], 0.0, 1.0)
-  io.println("  random_normal: mean=" <> float_to_str(tensor.mean(random_data))
-             <> ", std=" <> float_to_str(tensor.std(random_data)))
+  io.println(
+    "  random_normal: mean="
+    <> float_to_str(tensor.mean(random_data))
+    <> ", std="
+    <> float_to_str(tensor.std(random_data)),
+  )
 
   io.println("")
 }
@@ -105,16 +117,24 @@ fn demo_int8_quantization() {
 
   // Criar tensor de pesos simulando uma layer de rede neural
   let weights = tensor.random_normal([256, 256], 0.0, 0.5)
-  let original_size = 256 * 256 * 4  // FP32 = 4 bytes
+  let original_size = 256 * 256 * 4
+  // FP32 = 4 bytes
 
-  io.println("  Original: " <> int.to_string(256 * 256) <> " floats = "
-             <> format_bytes(original_size))
+  io.println(
+    "  Original: "
+    <> int.to_string(256 * 256)
+    <> " floats = "
+    <> format_bytes(original_size),
+  )
 
   // Quantizar
   let quantized = compression.quantize_int8(weights)
-  io.println("  Quantizado: " <> int.to_string(quantized.memory_bytes) <> " bytes")
+  io.println(
+    "  Quantizado: " <> int.to_string(quantized.memory_bytes) <> " bytes",
+  )
 
-  let compression_ratio = int.to_float(original_size) /. int.to_float(quantized.memory_bytes)
+  let compression_ratio =
+    int.to_float(original_size) /. int.to_float(quantized.memory_bytes)
   io.println("  Compressão: " <> float_to_str(compression_ratio) <> "x")
 
   // Dequantizar e medir erro
@@ -143,8 +163,12 @@ fn demo_nf4_quantization() {
   let config = nf4.default_config()
   let quantized = nf4.quantize(weights, config)
 
-  io.println("  NF4 quantizado: " <> int.to_string(quantized.memory_bytes) <> " bytes")
-  io.println("  Compressão: " <> float_to_str(quantized.compression_ratio) <> "x")
+  io.println(
+    "  NF4 quantizado: " <> int.to_string(quantized.memory_bytes) <> " bytes",
+  )
+  io.println(
+    "  Compressão: " <> float_to_str(quantized.compression_ratio) <> "x",
+  )
 
   // Dequantizar
   let recovered = nf4.dequantize(quantized)
@@ -153,7 +177,8 @@ fn demo_nf4_quantization() {
 
   // Double quantization
   let dq_quantized = nf4.double_quantize(weights, config)
-  let dq_ratio = int.to_float(original_size) /. int.to_float(dq_quantized.memory_bytes)
+  let dq_ratio =
+    int.to_float(original_size) /. int.to_float(dq_quantized.memory_bytes)
   io.println("  NF4+DQ: " <> float_to_str(dq_ratio) <> "x compressão")
 
   io.println("")
@@ -184,9 +209,12 @@ fn demo_awq_quantization() {
   let config = awq.default_config()
   let quantized = awq.quantize_awq(weights, calibration_data, config)
 
-  io.println("  AWQ quantizado: " <> int.to_string(quantized.memory_bytes) <> " bytes")
+  io.println(
+    "  AWQ quantizado: " <> int.to_string(quantized.memory_bytes) <> " bytes",
+  )
 
-  let compression_ratio = int.to_float(original_size) /. int.to_float(quantized.memory_bytes)
+  let compression_ratio =
+    int.to_float(original_size) /. int.to_float(quantized.memory_bytes)
   io.println("  Compressão: " <> float_to_str(compression_ratio) <> "x")
 
   // Dequantizar
@@ -218,14 +246,19 @@ fn demo_flash_attention() {
   io.println("  Head dimension: " <> int.to_string(head_dim))
 
   // Naive attention (O(n²) memory)
-  let #(naive_output, naive_mem) = flash_attention.naive_attention(q, k, v, 0.125)
+  let #(naive_output, naive_mem) =
+    flash_attention.naive_attention(q, k, v, 0.125)
   io.println("  Naive attention memory: " <> format_bytes(naive_mem))
 
   // Flash attention (O(n) memory)
   let config = flash_attention.default_config(head_dim)
   let flash_result = flash_attention.flash_attention(q, k, v, config)
-  io.println("  Flash attention memory: " <> format_bytes(flash_result.memory_bytes))
-  io.println("  Memory saved: " <> float_to_str(flash_result.memory_saved_percent) <> "%")
+  io.println(
+    "  Flash attention memory: " <> format_bytes(flash_result.memory_bytes),
+  )
+  io.println(
+    "  Memory saved: " <> float_to_str(flash_result.memory_saved_percent) <> "%",
+  )
 
   // Verificar que outputs são similares
   let diff = compute_error(naive_output, flash_result.output)
@@ -255,7 +288,8 @@ fn demo_sparsity() {
   io.println("  Sparse memory: " <> format_bytes(sparse.memory_bytes))
   io.println("  Sparsity: " <> float_to_str(sparse.sparsity_percent) <> "%")
 
-  let compression_ratio = int.to_float(original_size) /. int.to_float(sparse.memory_bytes)
+  let compression_ratio =
+    int.to_float(original_size) /. int.to_float(sparse.memory_bytes)
   io.println("  Compression: " <> float_to_str(compression_ratio) <> "x")
 
   // Decompress e medir erro
@@ -282,10 +316,13 @@ fn demo_combined() {
 
   // Simular um LLM de 7B params
   let params = 7_000_000_000
-  let fp16_size = params * 2  // 14GB
+  let fp16_size = params * 2
+  // 14GB
 
   io.println("  Model: 7B parameters")
-  io.println("  FP16 size: " <> int.to_string(fp16_size / 1_000_000_000) <> "GB")
+  io.println(
+    "  FP16 size: " <> int.to_string(fp16_size / 1_000_000_000) <> "GB",
+  )
 
   io.println("")
   io.println("  ┌─────────────────────────────────────────────────────┐")
@@ -298,11 +335,16 @@ fn demo_combined() {
   io.println("  └─────────────────────────────────────────────────────┘")
 
   // RTX 4090 memory multiplication
-  let vram = 24  // GB
+  let vram = 24
+  // GB
   io.println("")
   io.println("  RTX 4090 24GB VRAM can effectively hold:")
-  io.println("    - FP16:           " <> int.to_string(vram / 14 * 7) <> "B params")
-  io.println("    - INT8:           " <> int.to_string(vram / 7 * 7) <> "B params")
+  io.println(
+    "    - FP16:           " <> int.to_string(vram / 14 * 7) <> "B params",
+  )
+  io.println(
+    "    - INT8:           " <> int.to_string(vram / 7 * 7) <> "B params",
+  )
   io.println("    - NF4:            " <> int.to_string(vram * 2) <> "B params")
   io.println("    - NF4 + Sparsity: " <> int.to_string(vram * 4) <> "B params")
 
@@ -315,7 +357,8 @@ fn demo_combined() {
 
 fn tensor_preview(t: Tensor) -> String {
   let data = tensor.to_list(t)
-  let preview = list.take(data, 5)
+  let preview =
+    list.take(data, 5)
     |> list.map(float_to_str)
     |> string.join(", ")
   "[" <> preview <> "...]"
@@ -353,7 +396,8 @@ fn float_to_str(f: Float) -> String {
 
 fn format_bytes(bytes: Int) -> String {
   case bytes {
-    b if b >= 1_073_741_824 -> float_to_str(int.to_float(b) /. 1_073_741_824.0) <> "GB"
+    b if b >= 1_073_741_824 ->
+      float_to_str(int.to_float(b) /. 1_073_741_824.0) <> "GB"
     b if b >= 1_048_576 -> float_to_str(int.to_float(b) /. 1_048_576.0) <> "MB"
     b if b >= 1024 -> int.to_string(b / 1024) <> "KB"
     b -> int.to_string(b) <> "B"
@@ -364,9 +408,8 @@ fn compute_error(original: Tensor, recovered: Tensor) -> Float {
   let orig_data = tensor.to_list(original)
   let rec_data = tensor.to_list(recovered)
 
-  let diffs = list.map2(orig_data, rec_data, fn(a, b) {
-    float.absolute_value(a -. b)
-  })
+  let diffs =
+    list.map2(orig_data, rec_data, fn(a, b) { float.absolute_value(a -. b) })
 
   let sum = list.fold(diffs, 0.0, fn(acc, x) { acc +. x })
   sum /. int.to_float(list.length(diffs))

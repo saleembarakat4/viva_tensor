@@ -52,10 +52,7 @@ type Pid
 /// Cada tensor é processado em um processo BEAM separado.
 /// Em C/C++ isso precisaria de pthread_create + mutex para cada tensor.
 /// Em Gleam: uma linha de código e zero data races!
-pub fn parallel_map(
-  tensors: List(Tensor),
-  op: TensorOp,
-) -> List(Tensor) {
+pub fn parallel_map(tensors: List(Tensor), op: TensorOp) -> List(Tensor) {
   let parent = erlang_self()
   let indexed = list.index_map(tensors, fn(t, idx) { #(idx, t) })
 
@@ -157,10 +154,18 @@ pub fn main() {
 }
 
 pub fn benchmark_pool() {
-  io.println("╔══════════════════════════════════════════════════════════════════╗")
-  io.println("║  TensorPool - Distributed Tensor Computing em Pure Gleam!       ║")
-  io.println("║  Algo que C/C++ NÃO consegue fazer com essa simplicidade!       ║")
-  io.println("╚══════════════════════════════════════════════════════════════════╝\n")
+  io.println(
+    "╔══════════════════════════════════════════════════════════════════╗",
+  )
+  io.println(
+    "║  TensorPool - Distributed Tensor Computing em Pure Gleam!       ║",
+  )
+  io.println(
+    "║  Algo que C/C++ NÃO consegue fazer com essa simplicidade!       ║",
+  )
+  io.println(
+    "╚══════════════════════════════════════════════════════════════════╝\n",
+  )
 
   io.println("CONCEITO: GenServer + GPU")
   io.println("  - GenServer gerencia estado e load balancing")
@@ -174,13 +179,10 @@ pub fn benchmark_pool() {
     list.range(1, 1000)
     |> list.map(fn(_) { tensor.random_uniform([512]) })
 
-  let #(seq_time, _) = timer_tc(fn() {
-    list.map(tensors, fn(t) { tensor.scale(t, 2.0) })
-  })
+  let #(seq_time, _) =
+    timer_tc(fn() { list.map(tensors, fn(t) { tensor.scale(t, 2.0) }) })
 
-  let #(par_time, _) = timer_tc(fn() {
-    parallel_map(tensors, Scale(2.0))
-  })
+  let #(par_time, _) = timer_tc(fn() { parallel_map(tensors, Scale(2.0)) })
 
   let speedup1 = safe_div(seq_time, par_time)
   io.println("  Sequential: " <> int.to_string(seq_time / 1000) <> "ms")
@@ -194,40 +196,66 @@ pub fn benchmark_pool() {
     list.range(1, 10_000)
     |> list.map(fn(_) { tensor.random_uniform([512]) })
 
-  let #(search_time, results) = timer_tc(fn() {
-    top_k_similar(query, docs, 10)
-  })
+  let #(search_time, results) =
+    timer_tc(fn() { top_k_similar(query, docs, 10) })
 
   let throughput = 10_000.0 /. { int.to_float(search_time) /. 1_000_000.0 }
-  io.println("  10K docs searched in: " <> int.to_string(search_time / 1000) <> "ms")
+  io.println(
+    "  10K docs searched in: " <> int.to_string(search_time / 1000) <> "ms",
+  )
   io.println("  Throughput: " <> float_to_string(throughput) <> " docs/sec")
   io.println("  Top 3 matches:")
   results
   |> list.take(3)
   |> list.each(fn(r) {
-    io.println("    Doc " <> int.to_string(r.index) <> ": sim=" <> float_to_string(r.similarity))
+    io.println(
+      "    Doc "
+      <> int.to_string(r.index)
+      <> ": sim="
+      <> float_to_string(r.similarity),
+    )
   })
 
   // Test 3: Parallel Reduce
   io.println("\n━━━ TEST 3: Parallel Reduce (Sum 1000 tensors) ━━━")
-  let #(reduce_time, total) = timer_tc(fn() {
-    parallel_sum(tensors)
-  })
+  let #(reduce_time, total) = timer_tc(fn() { parallel_sum(tensors) })
 
   io.println("  Time: " <> int.to_string(reduce_time / 1000) <> "ms")
   io.println("  Total: " <> float_to_string(total))
 
-  io.println("\n╔══════════════════════════════════════════════════════════════════╗")
-  io.println("║  COMO ISSO RODA NA GPU:                                         ║")
-  io.println("║                                                                  ║")
-  io.println("║  1. GenServer recebe request de tensor op                       ║")
-  io.println("║  2. Spawna Worker (processo BEAM ~2KB)                          ║")
-  io.println("║  3. Worker chama NIF (Rust/C) que acessa GPU                    ║")
-  io.println("║  4. NIF usa cuBLAS para matmul, cuDNN para conv                 ║")
-  io.println("║  5. Resultado volta pro Worker, depois pro GenServer            ║")
-  io.println("║                                                                  ║")
-  io.println("║  Vantagem: milhares de ops em paralelo, fault tolerant!         ║")
-  io.println("╚══════════════════════════════════════════════════════════════════╝")
+  io.println(
+    "\n╔══════════════════════════════════════════════════════════════════╗",
+  )
+  io.println(
+    "║  COMO ISSO RODA NA GPU:                                         ║",
+  )
+  io.println(
+    "║                                                                  ║",
+  )
+  io.println(
+    "║  1. GenServer recebe request de tensor op                       ║",
+  )
+  io.println(
+    "║  2. Spawna Worker (processo BEAM ~2KB)                          ║",
+  )
+  io.println(
+    "║  3. Worker chama NIF (Rust/C) que acessa GPU                    ║",
+  )
+  io.println(
+    "║  4. NIF usa cuBLAS para matmul, cuDNN para conv                 ║",
+  )
+  io.println(
+    "║  5. Resultado volta pro Worker, depois pro GenServer            ║",
+  )
+  io.println(
+    "║                                                                  ║",
+  )
+  io.println(
+    "║  Vantagem: milhares de ops em paralelo, fault tolerant!         ║",
+  )
+  io.println(
+    "╚══════════════════════════════════════════════════════════════════╝",
+  )
 }
 
 // ============================================================================

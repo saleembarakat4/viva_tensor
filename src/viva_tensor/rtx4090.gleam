@@ -22,11 +22,11 @@ import gleam/float
 import gleam/int
 import gleam/io
 import gleam/list
-import viva_tensor/tensor.{type Tensor, Tensor}
 import viva_tensor/blackwell.{
-  type BlackwellTensor, type CompressionConfig, type CompressionStats,
-  compress, compression_stats, decompress, nvfp4_config, int8_config,
+  type BlackwellTensor, type CompressionConfig, type CompressionStats, compress,
+  compression_stats, decompress, int8_config, nvfp4_config,
 }
+import viva_tensor/tensor.{type Tensor, Tensor}
 
 // ============================================================================
 // SPECS RTX 4090
@@ -65,10 +65,11 @@ pub type Rtx4090Specs {
 /// Retorna specs da RTX 4090
 pub fn get_specs() -> Rtx4090Specs {
   Rtx4090Specs(
-    cuda_cores: 16384,
+    cuda_cores: 16_384,
     tensor_cores: 512,
     vram_gb: 24.0,
-    vram_available_gb: 22.0,  // 2GB reservado para sistema
+    vram_available_gb: 22.0,
+    // 2GB reservado para sistema
     bandwidth_gbps: 1008.0,
     tdp_watts: 450,
     tflops_fp32: 82.6,
@@ -122,15 +123,20 @@ pub fn default_config() -> Rtx4090Config {
   // Assumindo modelo típico: 512 dims, ~2MB por batch
   // 22GB disponível / 2MB = ~11000 batches simultâneos
   // Mas Tensor Cores funcionam melhor com batches de 64-256
-  let batch_size = 128  // Sweet spot para Tensor Cores
+  let batch_size = 128
+  // Sweet spot para Tensor Cores
 
   Rtx4090Config(
     optimal_batch_size: batch_size,
-    tensor_core_tile: 16,  // 16x16 tiles para máxima eficiência
-    memory_alignment: 32,   // 256 bits = 32 bytes
-    threads_per_block: 256, // 8 warps por bloco
+    tensor_core_tile: 16,
+    // 16x16 tiles para máxima eficiência
+    memory_alignment: 32,
+    // 256 bits = 32 bytes
+    threads_per_block: 256,
+    // 8 warps por bloco
     use_tensor_cores: True,
-    quant_mode: Int8TensorMode,  // 661 TOPS!
+    quant_mode: Int8TensorMode,
+    // 661 TOPS!
   )
 }
 
@@ -147,7 +153,8 @@ pub fn precision_config() -> Rtx4090Config {
 pub fn speed_config() -> Rtx4090Config {
   Rtx4090Config(
     ..default_config(),
-    optimal_batch_size: 256,  // Maior batch
+    optimal_batch_size: 256,
+    // Maior batch
     use_tensor_cores: True,
     quant_mode: Int8TensorMode,
   )
@@ -207,20 +214,30 @@ pub fn can_allocate(state: GpuMemoryState, bytes: Int) -> Bool {
 }
 
 /// Aloca memória para tensor
-pub fn allocate(state: GpuMemoryState, bytes: Int) -> Result(GpuMemoryState, String) {
+pub fn allocate(
+  state: GpuMemoryState,
+  bytes: Int,
+) -> Result(GpuMemoryState, String) {
   case can_allocate(state, bytes) {
     True -> {
-      Ok(GpuMemoryState(
-        ..state,
-        used_bytes: state.used_bytes + bytes,
-        free_bytes: state.free_bytes - bytes,
-        allocated_tensors: state.allocated_tensors + 1,
-      ))
+      Ok(
+        GpuMemoryState(
+          ..state,
+          used_bytes: state.used_bytes + bytes,
+          free_bytes: state.free_bytes - bytes,
+          allocated_tensors: state.allocated_tensors + 1,
+        ),
+      )
     }
     False -> {
-      Error("OOM: Não há VRAM suficiente. Livre: " <>
-            int.to_string(state.free_bytes / 1024 / 1024) <> "MB, " <>
-            "Necessário: " <> int.to_string(bytes / 1024 / 1024) <> "MB")
+      Error(
+        "OOM: Não há VRAM suficiente. Livre: "
+        <> int.to_string(state.free_bytes / 1024 / 1024)
+        <> "MB, "
+        <> "Necessário: "
+        <> int.to_string(bytes / 1024 / 1024)
+        <> "MB",
+      )
     }
   }
 }
@@ -277,7 +294,8 @@ pub fn process_batch(
   let start = erlang_monotonic_time()
 
   // Coleta resultados
-  let results = collect_n(list.length(tensors))
+  let results =
+    collect_n(list.length(tensors))
     |> list.sort(fn(a, b) {
       let #(i1, _) = a
       let #(i2, _) = b
@@ -293,17 +311,19 @@ pub fn process_batch(
   let time_ms = time_ns / 1_000_000
 
   // Estatísticas
-  let total_original = list.fold(tensors, 0, fn(acc, t) {
-    acc + { list.length(tensor.to_list(t)) * 4 }
-  })
+  let total_original =
+    list.fold(tensors, 0, fn(acc, t) {
+      acc + { list.length(tensor.to_list(t)) * 4 }
+    })
 
-  let total_compressed = list.fold(results, 0, fn(acc, bt) {
-    acc + bt.memory_bytes
-  })
+  let total_compressed =
+    list.fold(results, 0, fn(acc, bt) { acc + bt.memory_bytes })
 
   let ratio = int.to_float(total_original) /. int.to_float(total_compressed)
-  let saved_mb = int.to_float(total_original - total_compressed) /. 1024.0 /. 1024.0
-  let throughput = int.to_float(list.length(tensors)) /. { int.to_float(time_ms) /. 1000.0 }
+  let saved_mb =
+    int.to_float(total_original - total_compressed) /. 1024.0 /. 1024.0
+  let throughput =
+    int.to_float(list.length(tensors)) /. { int.to_float(time_ms) /. 1000.0 }
 
   BatchResult(
     tensors: results,
@@ -370,7 +390,8 @@ pub fn estimate_performance(
   }
 
   // Tempo total (assumindo overlap parcial)
-  let total_time = float.max(compute_time, memory_time) *. 1.2  // 20% overhead
+  let total_time = float.max(compute_time, memory_time) *. 1.2
+  // 20% overhead
 
   // Eficiência
   let theoretical_time = float.max(compute_time, memory_time)
@@ -396,31 +417,61 @@ pub fn main() {
 pub fn benchmark_rtx4090() {
   let specs = get_specs()
 
-  io.println("╔══════════════════════════════════════════════════════════════════╗")
-  io.println("║  RTX 4090 ASUS ROG STRIX - OPTIMIZED ENGINE                      ║")
-  io.println("║  Pure Gleam maximizando hardware NVIDIA!                         ║")
-  io.println("╚══════════════════════════════════════════════════════════════════╝\n")
+  io.println(
+    "╔══════════════════════════════════════════════════════════════════╗",
+  )
+  io.println(
+    "║  RTX 4090 ASUS ROG STRIX - OPTIMIZED ENGINE                      ║",
+  )
+  io.println(
+    "║  Pure Gleam maximizando hardware NVIDIA!                         ║",
+  )
+  io.println(
+    "╚══════════════════════════════════════════════════════════════════╝\n",
+  )
 
   io.println("ESPECIFICAÇÕES RTX 4090:")
   io.println("  CUDA Cores:    " <> int.to_string(specs.cuda_cores))
-  io.println("  Tensor Cores:  " <> int.to_string(specs.tensor_cores) <> " (4th Gen)")
-  io.println("  VRAM:          " <> float_to_string(specs.vram_gb) <> " GB GDDR6X")
-  io.println("  Bandwidth:     " <> float_to_string(specs.bandwidth_gbps) <> " GB/s")
+  io.println(
+    "  Tensor Cores:  " <> int.to_string(specs.tensor_cores) <> " (4th Gen)",
+  )
+  io.println(
+    "  VRAM:          " <> float_to_string(specs.vram_gb) <> " GB GDDR6X",
+  )
+  io.println(
+    "  Bandwidth:     " <> float_to_string(specs.bandwidth_gbps) <> " GB/s",
+  )
   io.println("  L2 Cache:      " <> int.to_string(specs.l2_cache_mb) <> " MB")
   io.println("")
-  io.println("  FP32:          " <> float_to_string(specs.tflops_fp32) <> " TFLOPS")
-  io.println("  FP16 Tensor:   " <> float_to_string(specs.tflops_fp16) <> " TFLOPS (4x FP32!)")
-  io.println("  INT8 Tensor:   " <> float_to_string(specs.tops_int8) <> " TOPS (8x FP32!)")
+  io.println(
+    "  FP32:          " <> float_to_string(specs.tflops_fp32) <> " TFLOPS",
+  )
+  io.println(
+    "  FP16 Tensor:   "
+    <> float_to_string(specs.tflops_fp16)
+    <> " TFLOPS (4x FP32!)",
+  )
+  io.println(
+    "  INT8 Tensor:   "
+    <> float_to_string(specs.tops_int8)
+    <> " TOPS (8x FP32!)",
+  )
 
   // Memory state
   io.println("\n━━━ MEMORY STATE ━━━")
   let mem = init_memory()
-  io.println("  Total VRAM:    " <> int.to_string(mem.total_bytes / 1024 / 1024) <> " MB")
-  io.println("  Free VRAM:     " <> int.to_string(mem.free_bytes / 1024 / 1024) <> " MB")
+  io.println(
+    "  Total VRAM:    " <> int.to_string(mem.total_bytes / 1024 / 1024) <> " MB",
+  )
+  io.println(
+    "  Free VRAM:     " <> int.to_string(mem.free_bytes / 1024 / 1024) <> " MB",
+  )
 
   // Simula alocações
   let tensor_size = tensor_memory_bytes([1024, 1024], Int8TensorMode)
-  io.println("\n  Tensor 1024x1024 INT8: " <> int.to_string(tensor_size / 1024) <> " KB")
+  io.println(
+    "\n  Tensor 1024x1024 INT8: " <> int.to_string(tensor_size / 1024) <> " KB",
+  )
 
   let max_tensors = mem.free_bytes / tensor_size
   io.println("  Tensores que cabem:    " <> int.to_string(max_tensors))
@@ -430,17 +481,28 @@ pub fn benchmark_rtx4090() {
   let batch_sizes = [100, 500, 1000]
 
   list.each(batch_sizes, fn(n) {
-    let tensors = list.range(1, n)
+    let tensors =
+      list.range(1, n)
       |> list.map(fn(_) { tensor.random_uniform([512]) })
 
     let config = default_config()
     let result = process_batch(tensors, config)
 
     io.println("  " <> int.to_string(n) <> " tensors x 512d:")
-    io.println("    Tempo:       " <> int.to_string(result.total_time_ms) <> "ms")
-    io.println("    Throughput:  " <> float_to_string(result.throughput_tps) <> " tensors/sec")
-    io.println("    Compressão:  " <> float_to_string(result.compression_ratio) <> "x")
-    io.println("    Economia:    " <> float_to_string(result.memory_saved_mb) <> " MB")
+    io.println(
+      "    Tempo:       " <> int.to_string(result.total_time_ms) <> "ms",
+    )
+    io.println(
+      "    Throughput:  "
+      <> float_to_string(result.throughput_tps)
+      <> " tensors/sec",
+    )
+    io.println(
+      "    Compressão:  " <> float_to_string(result.compression_ratio) <> "x",
+    )
+    io.println(
+      "    Economia:    " <> float_to_string(result.memory_saved_mb) <> " MB",
+    )
     io.println("")
   })
 
@@ -449,35 +511,76 @@ pub fn benchmark_rtx4090() {
 
   // Matmul 4096x4096x4096 = 137B FLOPs
   let matmul_flops = 4096.0 *. 4096.0 *. 4096.0 *. 2.0
-  let matmul_bytes = 4096.0 *. 4096.0 *. 4.0 *. 3.0  // A, B, C matrices
+  let matmul_bytes = 4096.0 *. 4096.0 *. 4.0 *. 3.0
+  // A, B, C matrices
 
   io.println("  Matmul 4096x4096:")
 
-  let est_fp32 = estimate_performance(matmul_flops, matmul_bytes, precision_config())
-  io.println("    FP32:  " <> float_to_string(est_fp32.estimated_time_ms) <> "ms, " <>
-             bottleneck_str(est_fp32.bottleneck))
+  let est_fp32 =
+    estimate_performance(matmul_flops, matmul_bytes, precision_config())
+  io.println(
+    "    FP32:  "
+    <> float_to_string(est_fp32.estimated_time_ms)
+    <> "ms, "
+    <> bottleneck_str(est_fp32.bottleneck),
+  )
 
-  let est_fp16 = estimate_performance(matmul_flops, matmul_bytes /. 2.0,
-    Rtx4090Config(..default_config(), quant_mode: Fp16TensorMode))
-  io.println("    FP16:  " <> float_to_string(est_fp16.estimated_time_ms) <> "ms, " <>
-             bottleneck_str(est_fp16.bottleneck))
+  let est_fp16 =
+    estimate_performance(
+      matmul_flops,
+      matmul_bytes /. 2.0,
+      Rtx4090Config(..default_config(), quant_mode: Fp16TensorMode),
+    )
+  io.println(
+    "    FP16:  "
+    <> float_to_string(est_fp16.estimated_time_ms)
+    <> "ms, "
+    <> bottleneck_str(est_fp16.bottleneck),
+  )
 
-  let est_int8 = estimate_performance(matmul_flops, matmul_bytes /. 4.0, default_config())
-  io.println("    INT8:  " <> float_to_string(est_int8.estimated_time_ms) <> "ms, " <>
-             bottleneck_str(est_int8.bottleneck))
+  let est_int8 =
+    estimate_performance(matmul_flops, matmul_bytes /. 4.0, default_config())
+  io.println(
+    "    INT8:  "
+    <> float_to_string(est_int8.estimated_time_ms)
+    <> "ms, "
+    <> bottleneck_str(est_int8.bottleneck),
+  )
 
   // Recomendações
-  io.println("\n╔══════════════════════════════════════════════════════════════════╗")
-  io.println("║  RECOMENDAÇÕES PARA SUA RTX 4090:                                ║")
-  io.println("║                                                                  ║")
-  io.println("║  1. Use INT8 Tensor Cores para inference (661 TOPS!)             ║")
-  io.println("║  2. Batch size ótimo: 128-256 tensores                           ║")
-  io.println("║  3. Alinhe memória em 32 bytes (256-bit bus)                     ║")
-  io.println("║  4. Tile size 16x16 para Tensor Cores                            ║")
-  io.println("║  5. 22GB VRAM útil = ~22M tensores de 1KB                        ║")
-  io.println("║                                                                  ║")
-  io.println("║  Com compressão INT8: 24GB VRAM → 96GB efetivo!                  ║")
-  io.println("╚══════════════════════════════════════════════════════════════════╝")
+  io.println(
+    "\n╔══════════════════════════════════════════════════════════════════╗",
+  )
+  io.println(
+    "║  RECOMENDAÇÕES PARA SUA RTX 4090:                                ║",
+  )
+  io.println(
+    "║                                                                  ║",
+  )
+  io.println(
+    "║  1. Use INT8 Tensor Cores para inference (661 TOPS!)             ║",
+  )
+  io.println(
+    "║  2. Batch size ótimo: 128-256 tensores                           ║",
+  )
+  io.println(
+    "║  3. Alinhe memória em 32 bytes (256-bit bus)                     ║",
+  )
+  io.println(
+    "║  4. Tile size 16x16 para Tensor Cores                            ║",
+  )
+  io.println(
+    "║  5. 22GB VRAM útil = ~22M tensores de 1KB                        ║",
+  )
+  io.println(
+    "║                                                                  ║",
+  )
+  io.println(
+    "║  Com compressão INT8: 24GB VRAM → 96GB efetivo!                  ║",
+  )
+  io.println(
+    "╚══════════════════════════════════════════════════════════════════╝",
+  )
 }
 
 // ============================================================================

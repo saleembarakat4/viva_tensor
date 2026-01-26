@@ -1,46 +1,46 @@
 import gleam/dict.{type Dict}
+import gleam/int
 import gleam/list
 import gleam/result
-import gleam/int
 import gleam/string
 import viva_tensor/tensor.{type Tensor}
 
-/// Identificador único para cada nó no grafo computacional
+/// Unique identifier for each node in the computational graph
 pub type NodeId =
   Int
 
-/// Função que calcula o gradiente dos pais com base no gradiente deste nó
+/// Function that calculates parent gradients based on this node's gradient
 pub type BackwardFn =
   fn(Tensor) -> List(#(NodeId, Tensor))
 
-/// A Fita (Tape) mantém o histórico de operações do grafo computacional.
-/// Diferente do PyTorch (global/mutável), aqui a Tape é um valor imutável explícito.
+/// The Tape maintains the history of operations in the computational graph.
+/// Unlike PyTorch (global/mutable), here the Tape is an explicit immutable value.
 pub type Tape {
   Tape(
     next_id: NodeId,
-    // Mapeia ID do nó resultante -> Closure que calcula gradientes dos pais
+    // Maps resulting node ID -> Closure that computes gradients for parents
     operations: Dict(NodeId, BackwardFn),
   )
 }
 
-/// Uma variável rastreada no sistema de autograd
+/// A variable tracked in the autograd system
 pub type Variable {
   Variable(id: NodeId, data: Tensor)
 }
 
-/// O resultado de uma operação rastreada.
-/// Encapsula o valor produzido (ex: Variable) e o novo estado da fita.
-/// É análogo a uma State Monad.
+/// The result of a traced operation.
+/// Encapsulates the produced value (e.g., Variable) and the new tape state.
+/// Analogous to a State Monad.
 pub type Traced(a) {
   Traced(value: a, tape: Tape)
 }
 
-/// Cria uma nova fita vazia
+/// Creates a new empty tape
 pub fn new_tape() -> Tape {
   Tape(next_id: 0, operations: dict.new())
 }
 
-/// Registra uma nova variável (nó folha) no grafo
+/// Registers a new variable (leaf node) in the graph
 pub fn new_variable(tape: Tape, data: Tensor) -> Traced(Variable) {
   let id = tape.next_id
   let var = Variable(id: id, data: data)
@@ -49,11 +49,11 @@ pub fn new_variable(tape: Tape, data: Tensor) -> Traced(Variable) {
 }
 
 // =============================================================================
-// OPERAÇÕES RASTREADAS (Traced Operations)
+// TRACED OPERATIONS
 // =============================================================================
 
-/// Sequenciamento de operações (Pipe Monádico)
-/// Permite encadear camadas: x |> sequence(layer1) |> sequence(layer2)
+/// Operation sequencing (Monadic Pipe)
+/// Allows chaining layers: x |> sequence(layer1) |> sequence(layer2)
 pub fn sequence(
   input: Result(Traced(Variable), e),
   layer_fn: fn(Tape, Variable) -> Result(Traced(Variable), e),
@@ -62,25 +62,29 @@ pub fn sequence(
   layer_fn(tape, var)
 }
 
-/// Adição rastreada: c = a + b (suporta broadcasting)
-pub fn add(tape: Tape, a: Variable, b: Variable) -> Result(Traced(Variable), tensor.TensorError) {
+/// Traced addition: c = a + b (supports broadcasting)
+pub fn add(
+  tape: Tape,
+  a: Variable,
+  b: Variable,
+) -> Result(Traced(Variable), tensor.TensorError) {
   use res_data <- result.try(tensor.add_broadcast(a.data, b.data))
-  
+
   let res_id = tape.next_id
-  
+
   // Backward: y = a + b
-  // Se houve broadcast, precisamos somar o gradiente nas dimensões expandidas
+  // If broadcasting occurred, we need to sum gradients over expanded dimensions
   let backward = fn(grad: Tensor) {
     let grad_a = case grad.shape == a.data.shape {
       True -> grad
       False -> {
-        // Redução simplificada: se rank difere ou dimensão é 1, somamos
-        // No MVP, se a é [4] e grad é [5, 4], sum_axis(0) resolve
+        // Simplified reduction: if rank differs or dimension is 1, sum
+        // In MVP, if a is [4] and grad is [5, 4], sum_axis(0) solves it
         let assert Ok(res) = tensor.sum_axis(grad, 0)
         res
       }
     }
-    
+
     let grad_b = case grad.shape == b.data.shape {
       True -> grad
       False -> {
@@ -88,22 +92,26 @@ pub fn add(tape: Tape, a: Variable, b: Variable) -> Result(Traced(Variable), ten
         res
       }
     }
-    
+
     [#(a.id, grad_a), #(b.id, grad_b)]
   }
-  
+
   let new_ops = dict.insert(tape.operations, res_id, backward)
   let new_tape = Tape(next_id: res_id + 1, operations: new_ops)
-  
+
   Ok(Traced(value: Variable(id: res_id, data: res_data), tape: new_tape))
 }
 
-/// Subtração rastreada: c = a - b
-pub fn sub(tape: Tape, a: Variable, b: Variable) -> Result(Traced(Variable), tensor.TensorError) {
+/// Traced subtraction: c = a - b
+pub fn sub(
+  tape: Tape,
+  a: Variable,
+  b: Variable,
+) -> Result(Traced(Variable), tensor.TensorError) {
   use res_data <- result.try(tensor.sub(a.data, b.data))
-  
+
   let res_id = tape.next_id
-  
+
   // Backward: y = a - b 
   // dy/da = 1 * grad
   // dy/db = -1 * grad
@@ -111,188 +119,212 @@ pub fn sub(tape: Tape, a: Variable, b: Variable) -> Result(Traced(Variable), ten
     let neg_grad = tensor.negate(grad)
     [#(a.id, grad), #(b.id, neg_grad)]
   }
-  
+
   let new_ops = dict.insert(tape.operations, res_id, backward)
   let new_tape = Tape(next_id: res_id + 1, operations: new_ops)
-  
+
   Ok(Traced(value: Variable(id: res_id, data: res_data), tape: new_tape))
 }
 
-/// Multiplicação Element-wise rastreada: c = a * b
-pub fn mul(tape: Tape, a: Variable, b: Variable) -> Result(Traced(Variable), tensor.TensorError) {
+/// Traced Element-wise Multiplication: c = a * b
+pub fn mul(
+  tape: Tape,
+  a: Variable,
+  b: Variable,
+) -> Result(Traced(Variable), tensor.TensorError) {
   use res_data <- result.try(tensor.mul(a.data, b.data))
-  
+
   let res_id = tape.next_id
-  
+
   // Backward: y = a * b
   // dy/da = b * grad
   // dy/db = a * grad
   let backward = fn(grad: Tensor) {
-    // TODO: Tratar erros
+    // TODO: Handle errors
     let assert Ok(grad_a) = tensor.mul(grad, b.data)
     let assert Ok(grad_b) = tensor.mul(grad, a.data)
     [#(a.id, grad_a), #(b.id, grad_b)]
   }
-  
+
   let new_ops = dict.insert(tape.operations, res_id, backward)
   let new_tape = Tape(next_id: res_id + 1, operations: new_ops)
-  
+
   Ok(Traced(value: Variable(id: res_id, data: res_data), tape: new_tape))
 }
 
-/// Média (Reduce Mean) rastreada: y = mean(x)
-/// Retorna um Tensor escalar (rank 0 ou 1 dependendo da implementação base, aqui forçamos 1)
+/// Traced Mean (Reduce Mean): y = mean(x)
+/// Returns a scalar Tensor (rank 0 or 1 depending on base implementation, here we force 1)
 pub fn mean(tape: Tape, a: Variable) -> Traced(Variable) {
   let val = tensor.mean(a.data)
-  let res_data = tensor.from_list([val]) // Wrap scalar in tensor
-  
+  let res_data = tensor.from_list([val])
+  // Wrap scalar in tensor
+
   let res_id = tape.next_id
-  
+
   // Backward: y = sum(x) / n
   // dy/dx = (1/n) * grad
-  // O gradiente de entrada (grad) é um escalar (ou tensor de 1 elemento)
-  // Precisamos expandi-lo para o shape de x e dividir por n
+  // The input gradient (grad) is a scalar (or 1-element tensor)
+  // We need to expand it to x's shape and divide by n
   let backward = fn(grad: Tensor) {
     let n = tensor.size(a.data) |> int.to_float
     let grad_val = tensor.to_list(grad) |> list.first |> result.unwrap(1.0)
     let scaled_grad_val = grad_val /. n
-    
-    // Cria um tensor cheio com o valor do gradiente escalado
+
+    // Creates a filled tensor with the scaled gradient value
     let grad_input = tensor.fill(a.data.shape, scaled_grad_val)
     [#(a.id, grad_input)]
   }
-  
+
   let new_ops = dict.insert(tape.operations, res_id, backward)
   let new_tape = Tape(next_id: res_id + 1, operations: new_ops)
-  
+
   Traced(value: Variable(id: res_id, data: res_data), tape: new_tape)
 }
 
-/// Multiplicação matricial rastreada: c = a @ b
-pub fn matmul(tape: Tape, a: Variable, b: Variable) -> Result(Traced(Variable), tensor.TensorError) {
+/// Traced Matrix Multiplication: c = a @ b
+pub fn matmul(
+  tape: Tape,
+  a: Variable,
+  b: Variable,
+) -> Result(Traced(Variable), tensor.TensorError) {
   use res_data <- result.try(tensor.matmul(a.data, b.data))
-  
+
   let res_id = tape.next_id
-  
+
   // Backward: y = a @ b
   // dy/da = grad @ b.T
   // dy/db = a.T @ grad
   let backward = fn(grad: Tensor) {
-    // TODO: Tratamento de erro robusto dentro do backward
+    // TODO: Robust error handling inside backward
     let assert Ok(bt) = tensor.transpose(b.data)
     let assert Ok(at) = tensor.transpose(a.data)
-    
+
     let assert Ok(grad_a) = tensor.matmul(grad, bt)
     let assert Ok(grad_b) = tensor.matmul(at, grad)
-    
+
     [#(a.id, grad_a), #(b.id, grad_b)]
   }
-  
+
   let new_ops = dict.insert(tape.operations, res_id, backward)
   let new_tape = Tape(next_id: res_id + 1, operations: new_ops)
-  
+
   Ok(Traced(value: Variable(id: res_id, data: res_data), tape: new_tape))
 }
 
-/// Transposição rastreada: c = a.T
-pub fn transpose(tape: Tape, a: Variable) -> Result(Traced(Variable), tensor.TensorError) {
+/// Traced Transpose: c = a.T
+pub fn transpose(
+  tape: Tape,
+  a: Variable,
+) -> Result(Traced(Variable), tensor.TensorError) {
   use res_data <- result.try(tensor.transpose(a.data))
-  
+
   let res_id = tape.next_id
-  
+
   // Backward: y = a.T => dy/da = grad.T
   let backward = fn(grad: Tensor) {
     let assert Ok(grad_t) = tensor.transpose(grad)
     [#(a.id, grad_t)]
   }
-  
+
   let new_ops = dict.insert(tape.operations, res_id, backward)
   let new_tape = Tape(next_id: res_id + 1, operations: new_ops)
-  
+
   Ok(Traced(value: Variable(id: res_id, data: res_data), tape: new_tape))
 }
 
-/// ReLU rastreada
+/// Traced ReLU
 pub fn relu(tape: Tape, a: Variable) -> Traced(Variable) {
-  let res_data = tensor.map(a.data, fn(x) { 
-    case x >. 0.0 {
-      True -> x
-      False -> 0.0
-    }
-  })
-  
-  let res_id = tape.next_id
-  
-  // Backward: y = relu(a) => dy/da = 1 se a > 0 senão 0
-  let backward = fn(grad: Tensor) {
-    let mask = tensor.map(a.data, fn(x) {
+  let res_data =
+    tensor.map(a.data, fn(x) {
       case x >. 0.0 {
-        True -> 1.0
+        True -> x
         False -> 0.0
       }
     })
+
+  let res_id = tape.next_id
+
+  // Backward: y = relu(a) => dy/da = 1 if a > 0 else 0
+  let backward = fn(grad: Tensor) {
+    let mask =
+      tensor.map(a.data, fn(x) {
+        case x >. 0.0 {
+          True -> 1.0
+          False -> 0.0
+        }
+      })
     let assert Ok(grad_a) = tensor.mul(grad, mask)
     [#(a.id, grad_a)]
   }
-  
+
   let new_ops = dict.insert(tape.operations, res_id, backward)
   let new_tape = Tape(next_id: res_id + 1, operations: new_ops)
-  
+
   Traced(value: Variable(id: res_id, data: res_data), tape: new_tape)
 }
 
 // =============================================================================
-// MOTOR DE BACKPROPAGATION
+// BACKPROPAGATION ENGINE
 // =============================================================================
 
-/// Executa o backpropagation a partir de uma variável escalar (loss).
-/// Retorna um Mapa de NodeId -> Gradiente (Tensor)
-pub fn backward(tape: Tape, loss: Variable) -> Result(Dict(NodeId, Tensor), String) {
-  // Gradiente inicial dLoss/dLoss = 1.0
+/// Executes backpropagation starting from a scalar variable (loss).
+/// Returns a Map of NodeId -> Gradient (Tensor)
+pub fn backward(
+  tape: Tape,
+  loss: Variable,
+) -> Result(Dict(NodeId, Tensor), String) {
+  // Initial gradient dLoss/dLoss = 1.0
   let initial_grad = tensor.ones(loss.data.shape)
   let initial_grads = dict.from_list([#(loss.id, initial_grad)])
-  
-  // Processar nós na ordem reversa de criação (Topological Sort implícito)
-  // IDs são sequenciais, então (next_id - 1) até 0 garante a ordem correta.
+
+  // Process nodes in reverse creation order (Implicit Topological Sort)
+  // IDs are sequential, so (next_id - 1) down to 0 ensures correct order.
   let all_ids = list.range(tape.next_id - 1, 0)
-  
-  let final_grads = list.fold(all_ids, initial_grads, fn(grads, current_id) {
-    case dict.get(grads, current_id) {
-      Error(_) -> grads // Nó não contribui para a loss ou não foi computado
-      Ok(current_grad) -> {
-        // Se este nó tem uma operação registrada na fita, expande o gradiente
-        case dict.get(tape.operations, current_id) {
-          Error(_) -> grads // Nó folha (input), sem pais para propagar
-          Ok(back_fn) -> {
-            let parent_grads = back_fn(current_grad)
-            
-            // Acumula gradientes nos pais (soma se já houver gradiente)
-            list.fold(parent_grads, grads, fn(acc_grads, pair) {
-              let #(pid, pgrad) = pair
-              case dict.get(acc_grads, pid) {
-                Error(_) -> dict.insert(acc_grads, pid, pgrad)
-                Ok(existing) -> {
-                  case existing.shape == pgrad.shape {
-                    True -> {
-                      let assert Ok(sum) = tensor.add(existing, pgrad)
-                      dict.insert(acc_grads, pid, sum)
-                    }
-                    False -> {
-                      let msg = "ShapeMismatch no nó " <> int.to_string(pid) 
-                        <> ": existing=" <> string_shape(existing.shape) 
-                        <> ", new=" <> string_shape(pgrad.shape)
-                      panic as msg
+
+  let final_grads =
+    list.fold(all_ids, initial_grads, fn(grads, current_id) {
+      case dict.get(grads, current_id) {
+        Error(_) -> grads
+        // Node does not contribute to loss or hasn't been computed
+        Ok(current_grad) -> {
+          // If this node has an operation registered on the tape, expand gradient
+          case dict.get(tape.operations, current_id) {
+            Error(_) -> grads
+            // Leaf node (input), no parents to propagate to
+            Ok(back_fn) -> {
+              let parent_grads = back_fn(current_grad)
+
+              // Accumulate gradients in parents (sum if gradient already exists)
+              list.fold(parent_grads, grads, fn(acc_grads, pair) {
+                let #(pid, pgrad) = pair
+                case dict.get(acc_grads, pid) {
+                  Error(_) -> dict.insert(acc_grads, pid, pgrad)
+                  Ok(existing) -> {
+                    case existing.shape == pgrad.shape {
+                      True -> {
+                        let assert Ok(sum) = tensor.add(existing, pgrad)
+                        dict.insert(acc_grads, pid, sum)
+                      }
+                      False -> {
+                        let msg =
+                          "ShapeMismatch at node "
+                          <> int.to_string(pid)
+                          <> ": existing="
+                          <> string_shape(existing.shape)
+                          <> ", new="
+                          <> string_shape(pgrad.shape)
+                        panic as msg
+                      }
                     }
                   }
                 }
-              }
-            })
+              })
+            }
           }
         }
       }
-    }
-  })
-  
+    })
+
   Ok(final_grads)
 }
 

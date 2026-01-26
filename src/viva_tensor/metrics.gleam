@@ -16,8 +16,8 @@
 
 import gleam/float
 import gleam/int
-import gleam/list
 import gleam/io
+import gleam/list
 import gleam/string
 import viva_tensor/tensor.{type Tensor, Tensor}
 
@@ -54,7 +54,8 @@ pub type LayerMetrics {
   LayerMetrics(
     layer_name: String,
     metrics: QuantMetrics,
-    sensitivity: Float,  // Quão sensível é essa camada
+    sensitivity: Float,
+    // Quão sensível é essa camada
   )
 }
 
@@ -67,13 +68,14 @@ pub fn mse(original: Tensor, quantized: Tensor) -> Float {
   let orig = tensor.to_list(original)
   let quant = tensor.to_list(quantized)
 
-  let squared_errors = list.map2(orig, quant, fn(o, q) {
-    let diff = o -. q
-    diff *. diff
-  })
+  let squared_errors =
+    list.map2(orig, quant, fn(o, q) {
+      let diff = o -. q
+      diff *. diff
+    })
 
   list.fold(squared_errors, 0.0, fn(acc, x) { acc +. x })
-    /. int.to_float(list.length(squared_errors))
+  /. int.to_float(list.length(squared_errors))
 }
 
 /// MAE - Mean Absolute Error
@@ -81,12 +83,11 @@ pub fn mae(original: Tensor, quantized: Tensor) -> Float {
   let orig = tensor.to_list(original)
   let quant = tensor.to_list(quantized)
 
-  let abs_errors = list.map2(orig, quant, fn(o, q) {
-    float.absolute_value(o -. q)
-  })
+  let abs_errors =
+    list.map2(orig, quant, fn(o, q) { float.absolute_value(o -. q) })
 
   list.fold(abs_errors, 0.0, fn(acc, x) { acc +. x })
-    /. int.to_float(list.length(abs_errors))
+  /. int.to_float(list.length(abs_errors))
 }
 
 /// RMSE - Root Mean Squared Error
@@ -105,16 +106,19 @@ pub fn cosine_similarity(original: Tensor, quantized: Tensor) -> Float {
   let quant = tensor.to_list(quantized)
 
   // dot product
-  let dot = list.map2(orig, quant, fn(o, q) { o *. q })
+  let dot =
+    list.map2(orig, quant, fn(o, q) { o *. q })
     |> list.fold(0.0, fn(acc, x) { acc +. x })
 
   // norms
-  let norm_orig = orig
+  let norm_orig =
+    orig
     |> list.map(fn(x) { x *. x })
     |> list.fold(0.0, fn(acc, x) { acc +. x })
     |> float.square_root
 
-  let norm_quant = quant
+  let norm_quant =
+    quant
     |> list.map(fn(x) { x *. x })
     |> list.fold(0.0, fn(acc, x) { acc +. x })
     |> float.square_root
@@ -132,23 +136,26 @@ pub fn snr_db(original: Tensor, quantized: Tensor) -> Float {
   let quant = tensor.to_list(quantized)
 
   // Signal power = mean(x²)
-  let signal_power = orig
+  let signal_power =
+    orig
     |> list.map(fn(x) { x *. x })
     |> list.fold(0.0, fn(acc, x) { acc +. x })
     |> fn(sum) { sum /. int.to_float(list.length(orig)) }
 
   // Noise power = mean((x - x')²)
-  let noise_power = list.map2(orig, quant, fn(o, q) {
-    let diff = o -. q
-    diff *. diff
-  })
+  let noise_power =
+    list.map2(orig, quant, fn(o, q) {
+      let diff = o -. q
+      diff *. diff
+    })
     |> list.fold(0.0, fn(acc, x) { acc +. x })
     |> fn(sum) { sum /. int.to_float(list.length(orig)) }
 
   // Evita divisão por zero
   case noise_power >. 0.0 {
     True -> 10.0 *. log10(signal_power /. noise_power)
-    False -> 100.0  // Sem ruído = SNR infinito, capped
+    False -> 100.0
+    // Sem ruído = SNR infinito, capped
   }
 }
 
@@ -163,10 +170,8 @@ pub fn max_error(original: Tensor, quantized: Tensor) -> Float {
   let orig = tensor.to_list(original)
   let quant = tensor.to_list(quantized)
 
-  list.map2(orig, quant, fn(o, q) {
-    float.absolute_value(o -. q)
-  })
-    |> list.fold(0.0, float.max)
+  list.map2(orig, quant, fn(o, q) { float.absolute_value(o -. q) })
+  |> list.fold(0.0, float.max)
 }
 
 // ============================================================================
@@ -174,13 +179,16 @@ pub fn max_error(original: Tensor, quantized: Tensor) -> Float {
 // ============================================================================
 
 /// Percentil do erro (aproximado via sorting)
-pub fn error_percentile(original: Tensor, quantized: Tensor, percentile: Float) -> Float {
+pub fn error_percentile(
+  original: Tensor,
+  quantized: Tensor,
+  percentile: Float,
+) -> Float {
   let orig = tensor.to_list(original)
   let quant = tensor.to_list(quantized)
 
-  let errors = list.map2(orig, quant, fn(o, q) {
-    float.absolute_value(o -. q)
-  })
+  let errors =
+    list.map2(orig, quant, fn(o, q) { float.absolute_value(o -. q) })
     |> list.sort(float.compare)
 
   let n = list.length(errors)
@@ -188,18 +196,25 @@ pub fn error_percentile(original: Tensor, quantized: Tensor, percentile: Float) 
   let safe_idx = int.min(idx, n - 1) |> int.max(0)
 
   list.drop(errors, safe_idx)
-    |> list.first
-    |> fn(r) { case r { Ok(v) -> v Error(_) -> 0.0 } }
+  |> list.first
+  |> fn(r) {
+    case r {
+      Ok(v) -> v
+      Error(_) -> 0.0
+    }
+  }
 }
 
 /// Porcentagem de outliers (erro > threshold)
-pub fn outlier_percentage(original: Tensor, quantized: Tensor, threshold: Float) -> Float {
+pub fn outlier_percentage(
+  original: Tensor,
+  quantized: Tensor,
+  threshold: Float,
+) -> Float {
   let orig = tensor.to_list(original)
   let quant = tensor.to_list(quantized)
 
-  let errors = list.map2(orig, quant, fn(o, q) {
-    float.absolute_value(o -. q)
-  })
+  let errors = list.map2(orig, quant, fn(o, q) { float.absolute_value(o -. q) })
 
   let outliers = list.filter(errors, fn(e) { e >. threshold })
   let n = list.length(errors)
@@ -221,7 +236,8 @@ pub fn compute_all(original: Tensor, quantized: Tensor) -> QuantMetrics {
   }
   let cosine_val = cosine_similarity(original, quantized)
   let snr_val = snr_db(original, quantized)
-  let sqnr_val = snr_val  // Para quantização, SNR ≈ SQNR
+  let sqnr_val = snr_val
+  // Para quantização, SNR ≈ SQNR
   let max_err = max_error(original, quantized)
   let p99 = error_percentile(original, quantized, 99.0)
   let outliers = outlier_percentage(original, quantized, 0.01)
@@ -259,22 +275,27 @@ pub fn compute_saliency(
       let n_samples = int.to_float(list.length(activations))
 
       // Mean per channel
-      let means = list.repeat(0.0, n_channels)
+      let means =
+        list.repeat(0.0, n_channels)
         |> list.index_fold(activations, _, fn(acc, acts, _) {
           list.map2(acc, acts, fn(a, act) { a +. act })
         })
         |> list.map(fn(s) { s /. n_samples })
 
       // Variance per channel
-      list.index_fold(activations, list.repeat(0.0, n_channels), fn(acc, acts, _) {
-        list.index_map(acc, fn(a, i) {
-          let mean = get_at(means, i) |> result_or(0.0)
-          let act = get_at(acts, i) |> result_or(0.0)
-          let diff = act -. mean
-          a +. diff *. diff
-        })
-      })
-        |> list.map(fn(v) { v /. n_samples })
+      list.index_fold(
+        activations,
+        list.repeat(0.0, n_channels),
+        fn(acc, acts, _) {
+          list.index_map(acc, fn(a, i) {
+            let mean = get_at(means, i) |> result_or(0.0)
+            let act = get_at(acts, i) |> result_or(0.0)
+            let diff = act -. mean
+            a +. diff *. diff
+          })
+        },
+      )
+      |> list.map(fn(v) { v /. n_samples })
     }
   }
 
@@ -282,9 +303,7 @@ pub fn compute_saliency(
   let padded_vars = pad_or_truncate(activation_vars, list.length(w_data), 1.0)
 
   // Saliency = var * w²
-  list.map2(padded_vars, w_data, fn(var, w) {
-    var *. w *. w
-  })
+  list.map2(padded_vars, w_data, fn(var, w) { var *. w *. w })
 }
 
 /// Identifica top K% de pesos salientes
@@ -293,17 +312,20 @@ pub fn find_salient_weights(saliency: List(Float), top_pct: Float) -> List(Int) 
   let indexed = list.index_map(saliency, fn(s, i) { #(i, s) })
 
   // Sort by saliency descending
-  let sorted = list.sort(indexed, fn(a, b) {
-    float.compare(b.1, a.1)  // descending
-  })
+  let sorted =
+    list.sort(indexed, fn(a, b) {
+      float.compare(b.1, a.1)
+      // descending
+    })
 
   // Take top K%
   let n = list.length(saliency)
-  let k = float.round(int.to_float(n) *. top_pct /. 100.0)
+  let k =
+    float.round(int.to_float(n) *. top_pct /. 100.0)
     |> int.max(1)
 
   list.take(sorted, k)
-    |> list.map(fn(pair) { pair.0 })
+  |> list.map(fn(pair) { pair.0 })
 }
 
 // ============================================================================
@@ -316,9 +338,15 @@ pub fn main() {
 
 pub fn benchmark_metrics() {
   io.println("")
-  io.println("╔═══════════════════════════════════════════════════════════════╗")
-  io.println("║          MÉTRICAS DE QUANTIZAÇÃO - BENCHMARK                  ║")
-  io.println("╚═══════════════════════════════════════════════════════════════╝")
+  io.println(
+    "╔═══════════════════════════════════════════════════════════════╗",
+  )
+  io.println(
+    "║          MÉTRICAS DE QUANTIZAÇÃO - BENCHMARK                  ║",
+  )
+  io.println(
+    "╚═══════════════════════════════════════════════════════════════╝",
+  )
   io.println("")
 
   // Criar tensor de teste
@@ -327,7 +355,7 @@ pub fn benchmark_metrics() {
   // Simular quantização com diferentes níveis de ruído
   let small_noise = add_noise(original, 0.01)
   let medium_noise = add_noise(original, 0.05)
-  let large_noise = add_noise(original, 0.10)
+  let large_noise = add_noise(original, 0.1)
 
   io.println("Original: 1024 floats, mean=0, std=1")
   io.println("")
@@ -340,13 +368,69 @@ pub fn benchmark_metrics() {
   let m2 = compute_all(original, medium_noise)
   let m3 = compute_all(original, large_noise)
 
-  io.println("│ MSE            │ " <> pad_float(m1.mse) <> " │ " <> pad_float(m2.mse) <> " │ " <> pad_float(m3.mse) <> " │")
-  io.println("│ MAE            │ " <> pad_float(m1.mae) <> " │ " <> pad_float(m2.mae) <> " │ " <> pad_float(m3.mae) <> " │")
-  io.println("│ RMSE           │ " <> pad_float(m1.rmse) <> " │ " <> pad_float(m2.rmse) <> " │ " <> pad_float(m3.rmse) <> " │")
-  io.println("│ Cosine Sim     │ " <> pad_float(m1.cosine_sim) <> " │ " <> pad_float(m2.cosine_sim) <> " │ " <> pad_float(m3.cosine_sim) <> " │")
-  io.println("│ SNR (dB)       │ " <> pad_float(m1.snr_db) <> " │ " <> pad_float(m2.snr_db) <> " │ " <> pad_float(m3.snr_db) <> " │")
-  io.println("│ Max Error      │ " <> pad_float(m1.max_error) <> " │ " <> pad_float(m2.max_error) <> " │ " <> pad_float(m3.max_error) <> " │")
-  io.println("│ P99 Error      │ " <> pad_float(m1.p99_error) <> " │ " <> pad_float(m2.p99_error) <> " │ " <> pad_float(m3.p99_error) <> " │")
+  io.println(
+    "│ MSE            │ "
+    <> pad_float(m1.mse)
+    <> " │ "
+    <> pad_float(m2.mse)
+    <> " │ "
+    <> pad_float(m3.mse)
+    <> " │",
+  )
+  io.println(
+    "│ MAE            │ "
+    <> pad_float(m1.mae)
+    <> " │ "
+    <> pad_float(m2.mae)
+    <> " │ "
+    <> pad_float(m3.mae)
+    <> " │",
+  )
+  io.println(
+    "│ RMSE           │ "
+    <> pad_float(m1.rmse)
+    <> " │ "
+    <> pad_float(m2.rmse)
+    <> " │ "
+    <> pad_float(m3.rmse)
+    <> " │",
+  )
+  io.println(
+    "│ Cosine Sim     │ "
+    <> pad_float(m1.cosine_sim)
+    <> " │ "
+    <> pad_float(m2.cosine_sim)
+    <> " │ "
+    <> pad_float(m3.cosine_sim)
+    <> " │",
+  )
+  io.println(
+    "│ SNR (dB)       │ "
+    <> pad_float(m1.snr_db)
+    <> " │ "
+    <> pad_float(m2.snr_db)
+    <> " │ "
+    <> pad_float(m3.snr_db)
+    <> " │",
+  )
+  io.println(
+    "│ Max Error      │ "
+    <> pad_float(m1.max_error)
+    <> " │ "
+    <> pad_float(m2.max_error)
+    <> " │ "
+    <> pad_float(m3.max_error)
+    <> " │",
+  )
+  io.println(
+    "│ P99 Error      │ "
+    <> pad_float(m1.p99_error)
+    <> " │ "
+    <> pad_float(m2.p99_error)
+    <> " │ "
+    <> pad_float(m3.p99_error)
+    <> " │",
+  )
   io.println("└────────────────┴────────────┴────────────┴────────────┘")
 
   io.println("")
@@ -364,11 +448,12 @@ pub fn benchmark_metrics() {
 
 fn add_noise(t: Tensor, noise_level: Float) -> Tensor {
   let data = tensor.to_list(t)
-  let noisy = list.index_map(data, fn(x, i) {
-    // Pseudo-random noise baseado no índice
-    let noise = int.to_float(i % 100 - 50) /. 50.0 *. noise_level
-    x +. noise
-  })
+  let noisy =
+    list.index_map(data, fn(x, i) {
+      // Pseudo-random noise baseado no índice
+      let noise = int.to_float(i % 100 - 50) /. 50.0 *. noise_level
+      x +. noise
+    })
   Tensor(data: noisy, shape: get_tensor_shape(t))
 }
 
@@ -399,7 +484,8 @@ fn approximate_ln(x: Float) -> Float {
     v if v <. 0.001 -> -7.0
     v if v <. 0.01 -> -4.6
     v if v <. 0.1 -> -2.3
-    v if v <. 1.0 -> v -. 1.0  // Aproximação linear perto de 1
+    v if v <. 1.0 -> v -. 1.0
+    // Aproximação linear perto de 1
     v if v <. 10.0 -> { v -. 1.0 } /. v *. 2.0
     v if v <. 100.0 -> 2.3 +. { v /. 10.0 -. 1.0 } /. { v /. 10.0 }
     _ -> 4.6
@@ -423,8 +509,8 @@ fn pad_float(f: Float) -> String {
 
 fn get_at(list: List(a), index: Int) -> Result(a, Nil) {
   list
-    |> list.drop(index)
-    |> list.first
+  |> list.drop(index)
+  |> list.first
 }
 
 fn result_or(r: Result(a, e), default: a) -> a {

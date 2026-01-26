@@ -28,22 +28,38 @@ import viva_tensor/tensor.{type Tensor, Tensor}
 /// Esses valores são hardcoded em bitsandbytes e usados em QLoRA
 pub fn nf4_levels() -> List(Float) {
   [
-    -1.0,                     // quantile(1/16)
-    -0.6961928009986877,      // quantile(2/16)
-    -0.5250730514526367,      // quantile(3/16)
-    -0.39491748809814453,     // quantile(4/16)
-    -0.28444138169288635,     // quantile(5/16)
-    -0.18477343022823334,     // quantile(6/16)
-    -0.09105003625154495,     // quantile(7/16)
-    0.0,                      // zero (importante!)
-    0.07958029955625534,      // quantile(9/16)
-    0.16093020141124725,      // quantile(10/16)
-    0.24611230194568634,      // quantile(11/16)
-    0.33791524171829224,      // quantile(12/16)
-    0.44070982933044434,      // quantile(13/16)
-    0.5626170039176941,       // quantile(14/16)
-    0.7229568362236023,       // quantile(15/16)
-    1.0,                      // quantile(16/16)
+    -1.0,
+    // quantile(1/16)
+    -0.6961928009986877,
+    // quantile(2/16)
+    -0.5250730514526367,
+    // quantile(3/16)
+    -0.39491748809814453,
+    // quantile(4/16)
+    -0.28444138169288635,
+    // quantile(5/16)
+    -0.18477343022823334,
+    // quantile(6/16)
+    -0.09105003625154495,
+    // quantile(7/16)
+    0.0,
+    // zero (importante!)
+    0.07958029955625534,
+    // quantile(9/16)
+    0.16093020141124725,
+    // quantile(10/16)
+    0.24611230194568634,
+    // quantile(11/16)
+    0.33791524171829224,
+    // quantile(12/16)
+    0.44070982933044434,
+    // quantile(13/16)
+    0.5626170039176941,
+    // quantile(14/16)
+    0.7229568362236023,
+    // quantile(15/16)
+    1.0,
+    // quantile(16/16)
   ]
 }
 
@@ -108,16 +124,17 @@ pub fn quantize(t: Tensor, config: NF4Config) -> NF4Tensor {
   let chunks = list.sized_chunk(data, config.block_size)
 
   // Quantiza cada bloco
-  let blocks = list.map(chunks, fn(chunk) {
-    quantize_block(chunk, config.block_size)
-  })
+  let blocks =
+    list.map(chunks, fn(chunk) { quantize_block(chunk, config.block_size) })
 
   // Calcula memória:
   // - 4 bits por valor
   // - 16 bits (FP16) para abs_max por bloco
   let num_blocks = list.length(blocks)
-  let data_bytes = num_elements / 2  // 4 bits = 0.5 bytes
-  let scale_bytes = num_blocks * 2   // FP16 = 2 bytes
+  let data_bytes = num_elements / 2
+  // 4 bits = 0.5 bytes
+  let scale_bytes = num_blocks * 2
+  // FP16 = 2 bytes
   let memory = data_bytes + scale_bytes
 
   // FP32 seria: num_elements * 4
@@ -136,7 +153,8 @@ pub fn quantize(t: Tensor, config: NF4Config) -> NF4Tensor {
 /// Quantiza um bloco de valores para NF4
 fn quantize_block(values: List(Float), block_size: Int) -> NF4Block {
   // Encontra abs_max para escala
-  let abs_max = values
+  let abs_max =
+    values
     |> list.map(float.absolute_value)
     |> list.fold(0.0, float.max)
 
@@ -182,12 +200,13 @@ fn find_nearest_nf4_index(value: Float) -> Int {
 pub fn dequantize(nf4: NF4Tensor) -> Tensor {
   let levels = nf4_levels()
 
-  let data = list.flat_map(nf4.blocks, fn(block) {
-    list.map(block.indices, fn(idx) {
-      let level = get_at_index(levels, idx, 0.0)
-      level *. block.abs_max
+  let data =
+    list.flat_map(nf4.blocks, fn(block) {
+      list.map(block.indices, fn(idx) {
+        let level = get_at_index(levels, idx, 0.0)
+        level *. block.abs_max
+      })
     })
-  })
 
   // Trunca para tamanho original (caso último bloco seja parcial)
   let truncated = list.take(data, nf4.num_elements)
@@ -227,7 +246,8 @@ pub fn double_quantize(t: Tensor, config: NF4Config) -> DoubleQuantNF4 {
   let scales = list.map(nf4.blocks, fn(b) { b.abs_max })
 
   // Quantiza os scales para INT8
-  let scales_max = scales
+  let scales_max =
+    scales
     |> list.map(float.absolute_value)
     |> list.fold(0.0, float.max)
 
@@ -236,16 +256,18 @@ pub fn double_quantize(t: Tensor, config: NF4Config) -> DoubleQuantNF4 {
     False -> 1.0
   }
 
-  let quantized_scales = list.map(scales, fn(s) {
-    let scaled = s *. scales_scale
-    float.clamp(scaled, -127.0, 127.0)
-    |> float.round
-  })
+  let quantized_scales =
+    list.map(scales, fn(s) {
+      let scaled = s *. scales_scale
+      float.clamp(scaled, -127.0, 127.0)
+      |> float.round
+    })
 
   // Memória: 4 bits/valor + 8 bits/bloco (scale) + 4 bytes global
   let num_blocks = list.length(nf4.blocks)
   let data_bytes = nf4.num_elements / 2
-  let scale_bytes = num_blocks  // 8 bits = 1 byte
+  let scale_bytes = num_blocks
+  // 8 bits = 1 byte
   let memory = data_bytes + scale_bytes + 4
 
   DoubleQuantNF4(
@@ -282,9 +304,8 @@ pub fn compute_stats(original: Tensor, nf4: NF4Tensor) -> NF4Stats {
   let decomp_data = tensor.to_list(decompressed)
 
   // Calcula erros
-  let errors = list.map2(orig_data, decomp_data, fn(o, d) {
-    float.absolute_value(o -. d)
-  })
+  let errors =
+    list.map2(orig_data, decomp_data, fn(o, d) { float.absolute_value(o -. d) })
 
   let mean_error = case errors {
     [] -> 0.0
@@ -317,10 +338,18 @@ pub fn main() {
 }
 
 pub fn benchmark_nf4() {
-  io.println("╔══════════════════════════════════════════════════════════════════╗")
-  io.println("║  NF4 (NormalFloat4) QUANTIZATION - QLoRA Style                   ║")
-  io.println("║  8x compressão com distribuição gaussiana otimizada!             ║")
-  io.println("╚══════════════════════════════════════════════════════════════════╝\n")
+  io.println(
+    "╔══════════════════════════════════════════════════════════════════╗",
+  )
+  io.println(
+    "║  NF4 (NormalFloat4) QUANTIZATION - QLoRA Style                   ║",
+  )
+  io.println(
+    "║  8x compressão com distribuição gaussiana otimizada!             ║",
+  )
+  io.println(
+    "╚══════════════════════════════════════════════════════════════════╝\n",
+  )
 
   io.println("NÍVEIS NF4 (16 quantis da distribuição normal):")
   nf4_levels()
@@ -333,53 +362,94 @@ pub fn benchmark_nf4() {
   let config = default_config()
 
   // NF4 normal
-  let #(time_nf4, nf4) = timer_tc(fn() {
-    quantize(t, config)
-  })
+  let #(time_nf4, nf4) = timer_tc(fn() { quantize(t, config) })
 
   let stats = compute_stats(t, nf4)
 
   io.println("\nNF4 Quantization:")
   io.println("  Tempo:       " <> int.to_string(time_nf4 / 1000) <> "ms")
-  io.println("  Original:    " <> int.to_string(stats.original_bytes / 1024) <> " KB")
-  io.println("  Comprimido:  " <> int.to_string(stats.compressed_bytes / 1024) <> " KB")
-  io.println("  Compressão:  " <> float_to_string(stats.compression_ratio) <> "x")
+  io.println(
+    "  Original:    " <> int.to_string(stats.original_bytes / 1024) <> " KB",
+  )
+  io.println(
+    "  Comprimido:  " <> int.to_string(stats.compressed_bytes / 1024) <> " KB",
+  )
+  io.println(
+    "  Compressão:  " <> float_to_string(stats.compression_ratio) <> "x",
+  )
   io.println("  Erro médio:  " <> float_to_string(stats.mean_error))
   io.println("  Erro máx:    " <> float_to_string(stats.max_error))
   io.println("  Blocos:      " <> int.to_string(stats.num_blocks))
 
   // Double Quantization
   io.println("\n━━━ DOUBLE QUANTIZATION (reduz overhead de metadados) ━━━")
-  let #(time_dq, dq) = timer_tc(fn() {
-    double_quantize(t, config)
-  })
+  let #(time_dq, dq) = timer_tc(fn() { double_quantize(t, config) })
 
-  let dq_ratio = int.to_float(stats.original_bytes) /. int.to_float(dq.memory_bytes)
+  let dq_ratio =
+    int.to_float(stats.original_bytes) /. int.to_float(dq.memory_bytes)
 
   io.println("  Tempo:       " <> int.to_string(time_dq / 1000) <> "ms")
-  io.println("  Comprimido:  " <> int.to_string(dq.memory_bytes / 1024) <> " KB")
+  io.println(
+    "  Comprimido:  " <> int.to_string(dq.memory_bytes / 1024) <> " KB",
+  )
   io.println("  Compressão:  " <> float_to_string(dq_ratio) <> "x")
 
   // Comparação com outros formatos
   io.println("\n━━━ COMPARAÇÃO DE FORMATOS ━━━")
-  io.println("  FP32:  " <> int.to_string(stats.original_bytes / 1024) <> " KB (1x)")
-  io.println("  FP16:  " <> int.to_string(stats.original_bytes / 2 / 1024) <> " KB (2x)")
-  io.println("  INT8:  " <> int.to_string(stats.original_bytes / 4 / 1024) <> " KB (4x)")
-  io.println("  NF4:   " <> int.to_string(stats.compressed_bytes / 1024) <> " KB (" <>
-             float_to_string(stats.compression_ratio) <> "x)")
-  io.println("  NF4+DQ: " <> int.to_string(dq.memory_bytes / 1024) <> " KB (" <>
-             float_to_string(dq_ratio) <> "x)")
+  io.println(
+    "  FP32:  " <> int.to_string(stats.original_bytes / 1024) <> " KB (1x)",
+  )
+  io.println(
+    "  FP16:  " <> int.to_string(stats.original_bytes / 2 / 1024) <> " KB (2x)",
+  )
+  io.println(
+    "  INT8:  " <> int.to_string(stats.original_bytes / 4 / 1024) <> " KB (4x)",
+  )
+  io.println(
+    "  NF4:   "
+    <> int.to_string(stats.compressed_bytes / 1024)
+    <> " KB ("
+    <> float_to_string(stats.compression_ratio)
+    <> "x)",
+  )
+  io.println(
+    "  NF4+DQ: "
+    <> int.to_string(dq.memory_bytes / 1024)
+    <> " KB ("
+    <> float_to_string(dq_ratio)
+    <> "x)",
+  )
 
-  io.println("\n╔══════════════════════════════════════════════════════════════════╗")
-  io.println("║  POR QUE NF4 É MELHOR QUE Q4 UNIFORME:                           ║")
-  io.println("║                                                                  ║")
-  io.println("║  1. Níveis derivados da distribuição normal                      ║")
-  io.println("║  2. Mais precisão próximo de zero (onde concentram pesos)        ║")
-  io.println("║  3. Matematicamente ótimo para dados gaussianos                  ║")
-  io.println("║  4. Usado em QLoRA, bitsandbytes, Hugging Face                   ║")
-  io.println("║                                                                  ║")
-  io.println("║  Com NF4: 24GB VRAM → ~192GB efetivo (8x)!                       ║")
-  io.println("╚══════════════════════════════════════════════════════════════════╝")
+  io.println(
+    "\n╔══════════════════════════════════════════════════════════════════╗",
+  )
+  io.println(
+    "║  POR QUE NF4 É MELHOR QUE Q4 UNIFORME:                           ║",
+  )
+  io.println(
+    "║                                                                  ║",
+  )
+  io.println(
+    "║  1. Níveis derivados da distribuição normal                      ║",
+  )
+  io.println(
+    "║  2. Mais precisão próximo de zero (onde concentram pesos)        ║",
+  )
+  io.println(
+    "║  3. Matematicamente ótimo para dados gaussianos                  ║",
+  )
+  io.println(
+    "║  4. Usado em QLoRA, bitsandbytes, Hugging Face                   ║",
+  )
+  io.println(
+    "║                                                                  ║",
+  )
+  io.println(
+    "║  Com NF4: 24GB VRAM → ~192GB efetivo (8x)!                       ║",
+  )
+  io.println(
+    "╚══════════════════════════════════════════════════════════════════╝",
+  )
 }
 
 // ============================================================================
@@ -401,7 +471,7 @@ fn get_at_index(lst: List(Float), idx: Int, default: Float) -> Float {
 }
 
 fn float_to_string(f: Float) -> String {
-  let rounded = int.to_float(float.round(f *. 10000.0)) /. 10000.0
+  let rounded = int.to_float(float.round(f *. 10_000.0)) /. 10_000.0
   float.to_string(rounded)
 }
 

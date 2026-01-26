@@ -69,14 +69,10 @@ pub fn default_config(head_dim: Int) -> FlashConfig {
   // 64-128 para Q, 64-256 para KV
   let scale = case float.square_root(int.to_float(head_dim)) {
     Ok(sqrt) -> 1.0 /. sqrt
-    Error(_) -> 0.125  // fallback for head_dim=64
+    Error(_) -> 0.125
+    // fallback for head_dim=64
   }
-  FlashConfig(
-    block_q: 64,
-    block_kv: 64,
-    scale: scale,
-    causal: False,
-  )
+  FlashConfig(block_q: 64, block_kv: 64, scale: scale, causal: False)
 }
 
 /// Config para causal (autoregressive)
@@ -117,23 +113,24 @@ pub fn naive_attention(
   let n_cols = list.length(k_rows)
 
   // Step 1: scores = Q @ K^T  (AQUI ESTÁ O PROBLEMA: n×n matriz!)
-  let scores = list.map(q_rows, fn(q_row) {
-    list.map(k_rows, fn(k_row) {
-      dot_product(q_row, k_row) *. scale
+  let scores =
+    list.map(q_rows, fn(q_row) {
+      list.map(k_rows, fn(k_row) { dot_product(q_row, k_row) *. scale })
     })
-  })
 
   // Step 2: softmax por linha
   let attn = list.map(scores, softmax_row)
 
   // Step 3: out = attn @ V
-  let output = list.map(attn, fn(attn_row) {
-    // Weighted sum of V rows
-    list.index_fold(attn_row, list.repeat(0.0, head_dim), fn(acc, weight, i) {
-      let v_row = get_row(v_rows, i)
-      list.map2(acc, v_row, fn(a, v) { a +. weight *. v })
+  let output =
+    list.map(attn, fn(attn_row) {
+      // Weighted sum of V rows
+      list.index_fold(attn_row, list.repeat(0.0, head_dim), fn(acc, weight, i) {
+        let v_row = get_row(v_rows, i)
+        list.map2(acc, v_row, fn(a, v) { a +. weight *. v })
+      })
     })
-  }) |> list.flatten
+    |> list.flatten
 
   // Memória: n×n scores matrix (FP32)
   let memory = n_rows * n_cols * 4
@@ -174,16 +171,19 @@ pub fn flash_attention(
   let v_blocks = list.sized_chunk(v_rows, config.block_kv)
 
   // Para cada bloco de Q, processa todos os blocos KV
-  let output = list.index_map(q_blocks, fn(q_block, q_block_idx) {
-    process_q_block(
-      q_block,
-      k_blocks,
-      v_blocks,
-      config,
-      q_block_idx,
-      head_dim,
-    )
-  }) |> list.flatten |> list.flatten
+  let output =
+    list.index_map(q_blocks, fn(q_block, q_block_idx) {
+      process_q_block(
+        q_block,
+        k_blocks,
+        v_blocks,
+        config,
+        q_block_idx,
+        head_dim,
+      )
+    })
+    |> list.flatten
+    |> list.flatten
 
   // Memória Flash: apenas block_q × block_kv por vez
   let flash_memory = config.block_q * config.block_kv * 4
@@ -191,9 +191,8 @@ pub fn flash_attention(
   // Memória naive: n×n
   let naive_memory = n_q * n_kv * 4
 
-  let saved = 100.0 *. {
-    1.0 -. int.to_float(flash_memory) /. int.to_float(naive_memory)
-  }
+  let saved =
+    100.0 *. { 1.0 -. int.to_float(flash_memory) /. int.to_float(naive_memory) }
 
   FlashResult(
     output: Tensor(data: output, shape: get_tensor_shape(q)),
@@ -212,36 +211,38 @@ fn process_q_block(
   head_dim: Int,
 ) -> List(List(Float)) {
   // Inicializa estatísticas online para cada query neste bloco
-  let initial_stats = list.map(q_block, fn(_) {
-    OnlineStats(
-      max_val: -999999.0,
-      sum_exp: 0.0,
-      output: list.repeat(0.0, head_dim),
-    )
-  })
+  let initial_stats =
+    list.map(q_block, fn(_) {
+      OnlineStats(
+        max_val: -999_999.0,
+        sum_exp: 0.0,
+        output: list.repeat(0.0, head_dim),
+      )
+    })
 
   // Itera sobre blocos KV, atualizando estatísticas
   let zipped_kv = list.zip(k_blocks, v_blocks)
 
-  let final_stats = list.index_fold(zipped_kv, initial_stats, fn(stats, kv_pair, kv_idx) {
-    let #(k_block, v_block) = kv_pair
+  let final_stats =
+    list.index_fold(zipped_kv, initial_stats, fn(stats, kv_pair, kv_idx) {
+      let #(k_block, v_block) = kv_pair
 
-    // Aplica causal mask se necessário
-    case config.causal {
-      True -> {
-        let q_start = q_block_idx * config.block_q
-        let kv_start = kv_idx * config.block_kv
-        let kv_end = kv_start + list.length(k_block)
+      // Aplica causal mask se necessário
+      case config.causal {
+        True -> {
+          let q_start = q_block_idx * config.block_q
+          let kv_start = kv_idx * config.block_kv
+          let kv_end = kv_start + list.length(k_block)
 
-        // Se todo o bloco KV está no futuro, pula
-        case kv_start > q_start + list.length(q_block) {
-          True -> stats
-          False -> process_kv_block(stats, q_block, k_block, v_block, config)
+          // Se todo o bloco KV está no futuro, pula
+          case kv_start > q_start + list.length(q_block) {
+            True -> stats
+            False -> process_kv_block(stats, q_block, k_block, v_block, config)
+          }
         }
+        False -> process_kv_block(stats, q_block, k_block, v_block, config)
       }
-      False -> process_kv_block(stats, q_block, k_block, v_block, config)
-    }
-  })
+    })
 
   // Normaliza outputs finais
   list.map(final_stats, fn(s) {
@@ -262,16 +263,16 @@ fn process_kv_block(
 ) -> List(OnlineStats) {
   list.map2(stats, q_block, fn(stat, q_row) {
     // Compute scores para este query vs todos os keys do bloco
-    let scores = list.map(k_block, fn(k_row) {
-      dot_product(q_row, k_row) *. config.scale
-    })
+    let scores =
+      list.map(k_block, fn(k_row) { dot_product(q_row, k_row) *. config.scale })
 
     // Online softmax update
     let new_max = list.fold(scores, stat.max_val, float.max)
 
     // Correção para o novo máximo
     let correction = case stat.sum_exp >. 0.0 {
-      True -> float.power(2.71828, stat.max_val -. new_max)
+      True ->
+        float.power(2.71828, stat.max_val -. new_max)
         |> result_to_float(1.0)
       False -> 1.0
     }
@@ -280,20 +281,26 @@ fn process_kv_block(
     let corrected_sum = stat.sum_exp *. correction
 
     // Computa novos pesos exponenciados
-    let exp_scores = list.map(scores, fn(s) {
-      float.power(2.71828, s -. new_max)
-      |> result_to_float(0.0)
-    })
+    let exp_scores =
+      list.map(scores, fn(s) {
+        float.power(2.71828, s -. new_max)
+        |> result_to_float(0.0)
+      })
 
     let new_sum = list.fold(exp_scores, corrected_sum, float.add)
 
     // Atualiza output: corrige anterior + adiciona contribuição do novo bloco
     let corrected_output = list.map(stat.output, fn(o) { o *. correction })
 
-    let new_contribution = list.index_fold(exp_scores, list.repeat(0.0, list.length(stat.output)), fn(acc, weight, i) {
-      let v_row = get_row(v_block, i)
-      list.map2(acc, v_row, fn(a, v) { a +. weight *. v })
-    })
+    let new_contribution =
+      list.index_fold(
+        exp_scores,
+        list.repeat(0.0, list.length(stat.output)),
+        fn(acc, weight, i) {
+          let v_row = get_row(v_block, i)
+          list.map2(acc, v_row, fn(a, v) { a +. weight *. v })
+        },
+      )
 
     let new_output = list.map2(corrected_output, new_contribution, float.add)
 
@@ -310,10 +317,18 @@ pub fn main() {
 }
 
 pub fn benchmark_flash_attention() {
-  io.println("╔══════════════════════════════════════════════════════════════════╗")
-  io.println("║  FLASH ATTENTION - O(n) Memory Algorithm                         ║")
-  io.println("║  Tri Dao et al., 2022 - FlashAttention                           ║")
-  io.println("╚══════════════════════════════════════════════════════════════════╝\n")
+  io.println(
+    "╔══════════════════════════════════════════════════════════════════╗",
+  )
+  io.println(
+    "║  FLASH ATTENTION - O(n) Memory Algorithm                         ║",
+  )
+  io.println(
+    "║  Tri Dao et al., 2022 - FlashAttention                           ║",
+  )
+  io.println(
+    "╚══════════════════════════════════════════════════════════════════╝\n",
+  )
 
   io.println("PROBLEMA DA ATTENTION PADRÃO:")
   io.println("  - Attention = softmax(Q @ K^T / sqrt(d)) @ V")
@@ -343,50 +358,92 @@ pub fn benchmark_flash_attention() {
     let config = default_config(head_dim)
 
     // Naive
-    let #(naive_time, #(_naive_out, naive_mem)) = timer_tc(fn() {
-      naive_attention(q, k, v, config.scale)
-    })
+    let #(naive_time, #(_naive_out, naive_mem)) =
+      timer_tc(fn() { naive_attention(q, k, v, config.scale) })
 
     // Flash
-    let #(flash_time, flash_result) = timer_tc(fn() {
-      flash_attention(q, k, v, config)
-    })
+    let #(flash_time, flash_result) =
+      timer_tc(fn() { flash_attention(q, k, v, config) })
 
     io.println("seq_len = " <> int.to_string(seq_len) <> ":")
-    io.println("  Naive:  " <> int.to_string(naive_time / 1000) <> "ms, " <>
-               int.to_string(naive_mem / 1024) <> " KB")
-    io.println("  Flash:  " <> int.to_string(flash_time / 1000) <> "ms, " <>
-               int.to_string(flash_result.memory_bytes / 1024) <> " KB")
-    io.println("  Memory saved: " <> float_to_string(flash_result.memory_saved_percent) <> "%")
+    io.println(
+      "  Naive:  "
+      <> int.to_string(naive_time / 1000)
+      <> "ms, "
+      <> int.to_string(naive_mem / 1024)
+      <> " KB",
+    )
+    io.println(
+      "  Flash:  "
+      <> int.to_string(flash_time / 1000)
+      <> "ms, "
+      <> int.to_string(flash_result.memory_bytes / 1024)
+      <> " KB",
+    )
+    io.println(
+      "  Memory saved: "
+      <> float_to_string(flash_result.memory_saved_percent)
+      <> "%",
+    )
     io.println("")
   })
 
   // Projeção para contextos longos
   io.println("━━━ PROJEÇÃO: Economia de Memória por Contexto ━━━")
-  let long_contexts = [1024, 2048, 4096, 8192, 16384, 32768]
+  let long_contexts = [1024, 2048, 4096, 8192, 16_384, 32_768]
 
   list.each(long_contexts, fn(n) {
-    let naive_mem = n * n * 4  // n×n FP32
-    let flash_mem = 64 * 64 * 4  // block_q × block_kv FP32
+    let naive_mem = n * n * 4
+    // n×n FP32
+    let flash_mem = 64 * 64 * 4
+    // block_q × block_kv FP32
 
-    let saved = 100.0 *. { 1.0 -. int.to_float(flash_mem) /. int.to_float(naive_mem) }
+    let saved =
+      100.0 *. { 1.0 -. int.to_float(flash_mem) /. int.to_float(naive_mem) }
 
-    io.println("  n=" <> int.to_string(n) <>
-               ": Naive=" <> bytes_to_string(naive_mem) <>
-               ", Flash=" <> bytes_to_string(flash_mem) <>
-               " (" <> float_to_string(saved) <> "% saved)")
+    io.println(
+      "  n="
+      <> int.to_string(n)
+      <> ": Naive="
+      <> bytes_to_string(naive_mem)
+      <> ", Flash="
+      <> bytes_to_string(flash_mem)
+      <> " ("
+      <> float_to_string(saved)
+      <> "% saved)",
+    )
   })
 
-  io.println("\n╔══════════════════════════════════════════════════════════════════╗")
-  io.println("║  POR QUE FLASH ATTENTION É REVOLUCIONÁRIO:                       ║")
-  io.println("║                                                                  ║")
-  io.println("║  1. Contextos longos viáveis (32K, 100K tokens)                  ║")
-  io.println("║  2. 2-4x speedup via IO-awareness                                ║")
-  io.println("║  3. Exatamente correto (não é aproximação!)                      ║")
-  io.println("║  4. Padrão em LLMs modernos (GPT-4, LLaMA, etc)                  ║")
-  io.println("║                                                                  ║")
-  io.println("║  viva_tensor + Flash = Contextos ilimitados na RTX 4090!         ║")
-  io.println("╚══════════════════════════════════════════════════════════════════╝")
+  io.println(
+    "\n╔══════════════════════════════════════════════════════════════════╗",
+  )
+  io.println(
+    "║  POR QUE FLASH ATTENTION É REVOLUCIONÁRIO:                       ║",
+  )
+  io.println(
+    "║                                                                  ║",
+  )
+  io.println(
+    "║  1. Contextos longos viáveis (32K, 100K tokens)                  ║",
+  )
+  io.println(
+    "║  2. 2-4x speedup via IO-awareness                                ║",
+  )
+  io.println(
+    "║  3. Exatamente correto (não é aproximação!)                      ║",
+  )
+  io.println(
+    "║  4. Padrão em LLMs modernos (GPT-4, LLaMA, etc)                  ║",
+  )
+  io.println(
+    "║                                                                  ║",
+  )
+  io.println(
+    "║  viva_tensor + Flash = Contextos ilimitados na RTX 4090!         ║",
+  )
+  io.println(
+    "╚══════════════════════════════════════════════════════════════════╝",
+  )
 }
 
 // ============================================================================
@@ -399,11 +456,12 @@ fn dot_product(a: List(Float), b: List(Float)) -> Float {
 }
 
 fn softmax_row(row: List(Float)) -> List(Float) {
-  let max_val = list.fold(row, -999999.0, float.max)
-  let exp_vals = list.map(row, fn(x) {
-    float.power(2.71828, x -. max_val)
-    |> result_to_float(0.0)
-  })
+  let max_val = list.fold(row, -999_999.0, float.max)
+  let exp_vals =
+    list.map(row, fn(x) {
+      float.power(2.71828, x -. max_val)
+      |> result_to_float(0.0)
+    })
   let sum = list.fold(exp_vals, 0.0, float.add)
   case sum >. 0.0 {
     True -> list.map(exp_vals, fn(e) { e /. sum })
@@ -432,8 +490,10 @@ fn float_to_string(f: Float) -> String {
 
 fn bytes_to_string(bytes: Int) -> String {
   case bytes {
-    b if b >= 1_073_741_824 -> float_to_string(int.to_float(b) /. 1_073_741_824.0) <> "GB"
-    b if b >= 1_048_576 -> float_to_string(int.to_float(b) /. 1_048_576.0) <> "MB"
+    b if b >= 1_073_741_824 ->
+      float_to_string(int.to_float(b) /. 1_073_741_824.0) <> "GB"
+    b if b >= 1_048_576 ->
+      float_to_string(int.to_float(b) /. 1_048_576.0) <> "MB"
     b if b >= 1024 -> int.to_string(b / 1024) <> "KB"
     b -> int.to_string(b) <> "B"
   }
