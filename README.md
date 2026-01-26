@@ -26,6 +26,41 @@ gleam add viva_tensor
 ## Use
 
 ```gleam
+import viva_tensor as t
+
+// Basic tensors
+let a = t.zeros([28, 28])
+let b = t.random_uniform([3, 3])
+
+// Conv2D
+let output = t.conv2d(a, b, t.conv2d_same(3, 3))
+
+// Pooling
+let pooled = t.max_pool2d(output, 2, 2, 2, 2)
+```
+
+## CNN Operations
+
+```mermaid
+flowchart LR
+    I[Input] --> C[conv2d]
+    C --> P[max_pool2d]
+    P --> G[global_avg_pool2d]
+    G --> O[Output]
+```
+
+| Function | Description |
+|----------|-------------|
+| `conv2d` | 2D convolution with stride/padding |
+| `conv2d_same` | "Same" padding config |
+| `pad2d/pad4d` | Zero padding |
+| `max_pool2d` | Max pooling |
+| `avg_pool2d` | Average pooling |
+| `global_avg_pool2d` | Global average pooling |
+
+## Quantization
+
+```gleam
 import viva_tensor/nf4
 
 let small = nf4.quantize(big_tensor, nf4.default_config())

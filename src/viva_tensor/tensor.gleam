@@ -1605,7 +1605,7 @@ fn conv2d_simple(
 
   // Compute output using direct array access
   let output = conv2d_simple_loop(
-    in_arr, k_arr, ph, pw, kh, kw,
+    in_arr, k_arr, pw, kh, kw,
     config.stride_h, config.stride_w,
     out_h, out_w, 0, 0, []
   )
@@ -1617,7 +1617,6 @@ fn conv2d_simple(
 fn conv2d_simple_loop(
   in_arr: ErlangArray,
   k_arr: ErlangArray,
-  in_h: Int,
   in_w: Int,
   kh: Int,
   kw: Int,
@@ -1634,7 +1633,7 @@ fn conv2d_simple_loop(
     False -> {
       case ow >= out_w {
         True -> conv2d_simple_loop(
-          in_arr, k_arr, in_h, in_w, kh, kw,
+          in_arr, k_arr, in_w, kh, kw,
           stride_h, stride_w, out_h, out_w,
           oh + 1, 0, acc
         )
@@ -1648,7 +1647,7 @@ fn conv2d_simple_loop(
           )
 
           conv2d_simple_loop(
-            in_arr, k_arr, in_h, in_w, kh, kw,
+            in_arr, k_arr, in_w, kh, kw,
             stride_h, stride_w, out_h, out_w,
             oh, ow + 1, [val, ..acc]
           )
@@ -2028,7 +2027,7 @@ pub fn max_pool2d(
       let out_w = { w - pool_w } / stride_w + 1
 
       let output = pool2d_loop(
-        arr, h, w, pool_h, pool_w, stride_h, stride_w,
+        arr, w, pool_h, pool_w, stride_h, stride_w,
         out_h, out_w, 0, 0, 0, True, []
       )
 
@@ -2042,7 +2041,7 @@ pub fn max_pool2d(
       let batch_size = c * spatial_size
 
       let output = pool4d_loop(
-        arr, n, c, h, w, pool_h, pool_w, stride_h, stride_w,
+        arr, n, c, w, pool_h, pool_w, stride_h, stride_w,
         spatial_size, batch_size, out_h, out_w,
         0, 0, 0, 0, True, []
       )
@@ -2057,7 +2056,6 @@ pub fn max_pool2d(
 /// 2D pooling loop (tail recursive)
 fn pool2d_loop(
   arr: ErlangArray,
-  h: Int,
   w: Int,
   pool_h: Int,
   pool_w: Int,
@@ -2076,7 +2074,7 @@ fn pool2d_loop(
     False -> {
       case ow >= out_w {
         True -> pool2d_loop(
-          arr, h, w, pool_h, pool_w, stride_h, stride_w,
+          arr, w, pool_h, pool_w, stride_h, stride_w,
           out_h, out_w, oh + 1, 0, base, is_max, acc
         )
         False -> {
@@ -2094,7 +2092,7 @@ fn pool2d_loop(
           }
 
           pool2d_loop(
-            arr, h, w, pool_h, pool_w, stride_h, stride_w,
+            arr, w, pool_h, pool_w, stride_h, stride_w,
             out_h, out_w, oh, ow + 1, base, is_max, [final_val, ..acc]
           )
         }
@@ -2108,7 +2106,6 @@ fn pool4d_loop(
   arr: ErlangArray,
   n: Int,
   c: Int,
-  h: Int,
   w: Int,
   pool_h: Int,
   pool_w: Int,
@@ -2130,21 +2127,21 @@ fn pool4d_loop(
     False -> {
       case channel >= c {
         True -> pool4d_loop(
-          arr, n, c, h, w, pool_h, pool_w, stride_h, stride_w,
+          arr, n, c, w, pool_h, pool_w, stride_h, stride_w,
           spatial_size, batch_size, out_h, out_w,
           batch + 1, 0, 0, 0, is_max, acc
         )
         False -> {
           case oh >= out_h {
             True -> pool4d_loop(
-              arr, n, c, h, w, pool_h, pool_w, stride_h, stride_w,
+              arr, n, c, w, pool_h, pool_w, stride_h, stride_w,
               spatial_size, batch_size, out_h, out_w,
               batch, channel + 1, 0, 0, is_max, acc
             )
             False -> {
               case ow >= out_w {
                 True -> pool4d_loop(
-                  arr, n, c, h, w, pool_h, pool_w, stride_h, stride_w,
+                  arr, n, c, w, pool_h, pool_w, stride_h, stride_w,
                   spatial_size, batch_size, out_h, out_w,
                   batch, channel, oh + 1, 0, is_max, acc
                 )
@@ -2164,7 +2161,7 @@ fn pool4d_loop(
                   }
 
                   pool4d_loop(
-                    arr, n, c, h, w, pool_h, pool_w, stride_h, stride_w,
+                    arr, n, c, w, pool_h, pool_w, stride_h, stride_w,
                     spatial_size, batch_size, out_h, out_w,
                     batch, channel, oh, ow + 1, is_max, [final_val, ..acc]
                   )
@@ -2231,7 +2228,7 @@ pub fn avg_pool2d(
       let out_w = { w - pool_w } / stride_w + 1
 
       let output = pool2d_loop(
-        arr, h, w, pool_h, pool_w, stride_h, stride_w,
+        arr, w, pool_h, pool_w, stride_h, stride_w,
         out_h, out_w, 0, 0, 0, False, []
       )
 
@@ -2245,7 +2242,7 @@ pub fn avg_pool2d(
       let batch_size = c * spatial_size
 
       let output = pool4d_loop(
-        arr, n, c, h, w, pool_h, pool_w, stride_h, stride_w,
+        arr, n, c, w, pool_h, pool_w, stride_h, stride_w,
         spatial_size, batch_size, out_h, out_w,
         0, 0, 0, 0, False, []
       )
