@@ -1536,36 +1536,7 @@ pub fn pad4d(
 }
 
 /// Extract a patch from 2D tensor at position (row, col)
-fn extract_patch(
-  data: List(Float),
-  h: Int,
-  w: Int,
-  row: Int,
-  col: Int,
-  kh: Int,
-  kw: Int,
-) -> List(Float) {
-  list.range(0, kh - 1)
-  |> list.flat_map(fn(kr) {
-    list.range(0, kw - 1)
-    |> list.map(fn(kc) {
-      let r = row + kr
-      let c = col + kc
-      case r >= 0 && r < h && c >= 0 && c < w {
-        True -> {
-          let idx = r * w + c
-          case list_at_float(data, idx) {
-            Ok(v) -> v
-            Error(_) -> 0.0
-          }
-        }
-        False -> 0.0
-      }
-    })
-  })
-}
-
-/// 2D Convolution using im2col + matmul approach
+/// 2D Convolution using optimized O(1) array access
 /// Input: [H, W] or [C, H, W] or [N, C, H, W]
 /// Kernel: [K_out, K_in, KH, KW] or [KH, KW] for single channel
 /// Output: [H_out, W_out] or [N, K_out, H_out, W_out]
@@ -1603,7 +1574,7 @@ pub fn conv2d(
   }
 }
 
-/// Simple 2D convolution (single channel)
+/// Simple 2D convolution (single channel) - OPTIMIZED with O(1) array access
 fn conv2d_simple(
   input: Tensor,
   kernel: Tensor,
@@ -1628,32 +1599,102 @@ fn conv2d_simple(
   let out_h = { ph - kh } / config.stride_h + 1
   let out_w = { pw - kw } / config.stride_w + 1
 
-  let in_data = get_data(padded)
-  let k_data = get_data(kernel)
+  // Convert to arrays for O(1) access
+  let in_arr = list_to_array_ffi(get_data(padded))
+  let k_arr = list_to_array_ffi(get_data(kernel))
 
-  // Compute output
-  let output =
-    list.range(0, out_h - 1)
-    |> list.flat_map(fn(oh) {
-      list.range(0, out_w - 1)
-      |> list.map(fn(ow) {
-        let row = oh * config.stride_h
-        let col = ow * config.stride_w
-        let patch = extract_patch(in_data, ph, pw, row, col, kh, kw)
+  // Compute output using direct array access
+  let output = conv2d_simple_loop(
+    in_arr, k_arr, ph, pw, kh, kw,
+    config.stride_h, config.stride_w,
+    out_h, out_w, 0, 0, []
+  )
 
-        // Dot product of patch and kernel
-        list.zip(patch, k_data)
-        |> list.fold(0.0, fn(acc, pair) {
-          let #(p, k) = pair
-          acc +. p *. k
-        })
-      })
-    })
-
-  Ok(Tensor(data: output, shape: [out_h, out_w]))
+  Ok(Tensor(data: list.reverse(output), shape: [out_h, out_w]))
 }
 
-/// Multi-channel convolution (sum over channels)
+/// Tail-recursive conv2d loop with O(1) array access
+fn conv2d_simple_loop(
+  in_arr: ErlangArray,
+  k_arr: ErlangArray,
+  in_h: Int,
+  in_w: Int,
+  kh: Int,
+  kw: Int,
+  stride_h: Int,
+  stride_w: Int,
+  out_h: Int,
+  out_w: Int,
+  oh: Int,
+  ow: Int,
+  acc: List(Float),
+) -> List(Float) {
+  case oh >= out_h {
+    True -> acc
+    False -> {
+      case ow >= out_w {
+        True -> conv2d_simple_loop(
+          in_arr, k_arr, in_h, in_w, kh, kw,
+          stride_h, stride_w, out_h, out_w,
+          oh + 1, 0, acc
+        )
+        False -> {
+          let row = oh * stride_h
+          let col = ow * stride_w
+
+          // Compute dot product inline
+          let val = conv2d_dot_product(
+            in_arr, k_arr, in_w, row, col, kh, kw, 0, 0, 0.0
+          )
+
+          conv2d_simple_loop(
+            in_arr, k_arr, in_h, in_w, kh, kw,
+            stride_h, stride_w, out_h, out_w,
+            oh, ow + 1, [val, ..acc]
+          )
+        }
+      }
+    }
+  }
+}
+
+/// Compute dot product of kernel with input patch - O(1) access per element
+fn conv2d_dot_product(
+  in_arr: ErlangArray,
+  k_arr: ErlangArray,
+  in_w: Int,
+  row: Int,
+  col: Int,
+  kh: Int,
+  kw: Int,
+  kr: Int,
+  kc: Int,
+  acc: Float,
+) -> Float {
+  case kr >= kh {
+    True -> acc
+    False -> {
+      case kc >= kw {
+        True -> conv2d_dot_product(
+          in_arr, k_arr, in_w, row, col, kh, kw, kr + 1, 0, acc
+        )
+        False -> {
+          let in_idx = { row + kr } * in_w + { col + kc }
+          let k_idx = kr * kw + kc
+          let in_val = array_get_ffi(in_arr, in_idx)
+          let k_val = array_get_ffi(k_arr, k_idx)
+
+          conv2d_dot_product(
+            in_arr, k_arr, in_w, row, col, kh, kw,
+            kr, kc + 1, acc +. in_val *. k_val
+          )
+        }
+      }
+    }
+  }
+}
+
+/// Multi-channel convolution (sum over channels) - OPTIMIZED
 fn conv2d_multichannel(
   input: Tensor,
   kernel: Tensor,
@@ -1668,57 +1709,154 @@ fn conv2d_multichannel(
   let out_w = { w + 2 * config.padding_w - kw } / config.stride_w + 1
   let spatial_size = h * w
   let k_spatial = kh * kw
-  let in_data = get_data(input)
-  let k_data = get_data(kernel)
 
-  // For each output position
-  let output =
-    list.range(0, out_h - 1)
-    |> list.flat_map(fn(oh) {
-      list.range(0, out_w - 1)
-      |> list.map(fn(ow) {
-        let row = oh * config.stride_h - config.padding_h
-        let col = ow * config.stride_w - config.padding_w
+  // Convert to arrays for O(1) access
+  let in_arr = list_to_array_ffi(get_data(input))
+  let k_arr = list_to_array_ffi(get_data(kernel))
 
-        // Sum over all input channels
-        list.range(0, c_in - 1)
-        |> list.fold(0.0, fn(acc, c) {
-          let ch_offset = c * spatial_size
-          let k_offset = c * k_spatial
+  let output = conv2d_mc_loop(
+    in_arr, k_arr, c_in, h, w, kh, kw,
+    spatial_size, k_spatial,
+    config.stride_h, config.stride_w,
+    config.padding_h, config.padding_w,
+    out_h, out_w, 0, 0, []
+  )
 
-          // Extract patch for this channel and compute dot product
-          list.range(0, kh - 1)
-          |> list.fold(acc, fn(acc2, kr) {
-            list.range(0, kw - 1)
-            |> list.fold(acc2, fn(acc3, kc) {
-              let r = row + kr
-              let c_pos = col + kc
-              let in_val = case r >= 0 && r < h && c_pos >= 0 && c_pos < w {
-                True -> {
-                  let idx = ch_offset + r * w + c_pos
-                  case list_at_float(in_data, idx) {
-                    Ok(v) -> v
-                    Error(_) -> 0.0
-                  }
-                }
-                False -> 0.0
-              }
-              let k_idx = k_offset + kr * kw + kc
-              let k_val = case list_at_float(k_data, k_idx) {
-                Ok(v) -> v
-                Error(_) -> 0.0
-              }
-              acc3 +. in_val *. k_val
-            })
-          })
-        })
-      })
-    })
+  Ok(Tensor(data: list.reverse(output), shape: [out_h, out_w]))
+}
 
-  Ok(Tensor(data: output, shape: [out_h, out_w]))
+/// Multi-channel conv loop - tail recursive
+fn conv2d_mc_loop(
+  in_arr: ErlangArray,
+  k_arr: ErlangArray,
+  c_in: Int,
+  h: Int,
+  w: Int,
+  kh: Int,
+  kw: Int,
+  spatial_size: Int,
+  k_spatial: Int,
+  stride_h: Int,
+  stride_w: Int,
+  pad_h: Int,
+  pad_w: Int,
+  out_h: Int,
+  out_w: Int,
+  oh: Int,
+  ow: Int,
+  acc: List(Float),
+) -> List(Float) {
+  case oh >= out_h {
+    True -> acc
+    False -> {
+      case ow >= out_w {
+        True -> conv2d_mc_loop(
+          in_arr, k_arr, c_in, h, w, kh, kw,
+          spatial_size, k_spatial, stride_h, stride_w, pad_h, pad_w,
+          out_h, out_w, oh + 1, 0, acc
+        )
+        False -> {
+          let row = oh * stride_h - pad_h
+          let col = ow * stride_w - pad_w
+
+          // Sum over all channels
+          let val = conv2d_mc_channels(
+            in_arr, k_arr, c_in, h, w, kh, kw,
+            spatial_size, k_spatial, row, col, 0, 0.0
+          )
+
+          conv2d_mc_loop(
+            in_arr, k_arr, c_in, h, w, kh, kw,
+            spatial_size, k_spatial, stride_h, stride_w, pad_h, pad_w,
+            out_h, out_w, oh, ow + 1, [val, ..acc]
+          )
+        }
+      }
+    }
+  }
+}
+
+/// Sum over input channels
+fn conv2d_mc_channels(
+  in_arr: ErlangArray,
+  k_arr: ErlangArray,
+  c_in: Int,
+  h: Int,
+  w: Int,
+  kh: Int,
+  kw: Int,
+  spatial_size: Int,
+  k_spatial: Int,
+  row: Int,
+  col: Int,
+  c: Int,
+  acc: Float,
+) -> Float {
+  case c >= c_in {
+    True -> acc
+    False -> {
+      let ch_offset = c * spatial_size
+      let k_offset = c * k_spatial
+
+      let channel_sum = conv2d_kernel_sum(
+        in_arr, k_arr, h, w, kh, kw, ch_offset, k_offset, row, col, 0, 0, 0.0
+      )
+
+      conv2d_mc_channels(
+        in_arr, k_arr, c_in, h, w, kh, kw,
+        spatial_size, k_spatial, row, col, c + 1, acc +. channel_sum
+      )
+    }
+  }
+}
+
+/// Sum over kernel window with bounds checking
+fn conv2d_kernel_sum(
+  in_arr: ErlangArray,
+  k_arr: ErlangArray,
+  h: Int,
+  w: Int,
+  kh: Int,
+  kw: Int,
+  ch_offset: Int,
+  k_offset: Int,
+  row: Int,
+  col: Int,
+  kr: Int,
+  kc: Int,
+  acc: Float,
+) -> Float {
+  case kr >= kh {
+    True -> acc
+    False -> {
+      case kc >= kw {
+        True -> conv2d_kernel_sum(
+          in_arr, k_arr, h, w, kh, kw, ch_offset, k_offset,
+          row, col, kr + 1, 0, acc
+        )
+        False -> {
+          let r = row + kr
+          let c_pos = col + kc
+
+          let in_val = case r >= 0 && r < h && c_pos >= 0 && c_pos < w {
+            True -> array_get_ffi(in_arr, ch_offset + r * w + c_pos)
+            False -> 0.0
+          }
+
+          let k_val = array_get_ffi(k_arr, k_offset + kr * kw + kc)
+
+          conv2d_kernel_sum(
+            in_arr, k_arr, h, w, kh, kw, ch_offset, k_offset,
+            row, col, kr, kc + 1, acc +. in_val *. k_val
+          )
+        }
+      }
+    }
+  }
 }
 
 /// Full convolution with batches and multiple output channels
+/// Full batched convolution - OPTIMIZED with O(1) array access
 fn conv2d_full(
   input: Tensor,
   kernel: Tensor,
@@ -1737,74 +1875,141 @@ fn conv2d_full(
   let in_batch_size = c_in * in_spatial
   let k_spatial = kh * kw
   let k_filter_size = c_in * k_spatial
-  let in_data = get_data(input)
-  let k_data = get_data(kernel)
 
-  // Process each batch
-  let output =
-    list.range(0, n - 1)
-    |> list.flat_map(fn(batch) {
-      let batch_offset = batch * in_batch_size
+  // Convert to arrays for O(1) access
+  let in_arr = list_to_array_ffi(get_data(input))
+  let k_arr = list_to_array_ffi(get_data(kernel))
 
-      // For each output channel (filter)
-      list.range(0, c_out - 1)
-      |> list.flat_map(fn(oc) {
-        let filter_offset = oc * k_filter_size
+  let output = conv2d_full_loop(
+    in_arr, k_arr, n, c_in, c_out, h, w, kh, kw,
+    in_spatial, in_batch_size, k_spatial, k_filter_size,
+    config.stride_h, config.stride_w, config.padding_h, config.padding_w,
+    out_h, out_w, 0, 0, 0, 0, []
+  )
 
-        // For each output position
-        list.range(0, out_h - 1)
-        |> list.flat_map(fn(oh) {
-          list.range(0, out_w - 1)
-          |> list.map(fn(ow) {
-            let row = oh * config.stride_h - config.padding_h
-            let col = ow * config.stride_w - config.padding_w
-
-            // Sum over all input channels
-            list.range(0, c_in - 1)
-            |> list.fold(0.0, fn(acc, ic) {
-              let ch_offset = batch_offset + ic * in_spatial
-              let k_ch_offset = filter_offset + ic * k_spatial
-
-              // Dot product over kernel window
-              list.range(0, kh - 1)
-              |> list.fold(acc, fn(acc2, kr) {
-                list.range(0, kw - 1)
-                |> list.fold(acc2, fn(acc3, kc) {
-                  let r = row + kr
-                  let c_pos = col + kc
-
-                  let in_val = case
-                    r >= 0 && r < h && c_pos >= 0 && c_pos < w
-                  {
-                    True -> {
-                      let idx = ch_offset + r * w + c_pos
-                      case list_at_float(in_data, idx) {
-                        Ok(v) -> v
-                        Error(_) -> 0.0
-                      }
-                    }
-                    False -> 0.0
-                  }
-
-                  let k_idx = k_ch_offset + kr * kw + kc
-                  let k_val = case list_at_float(k_data, k_idx) {
-                    Ok(v) -> v
-                    Error(_) -> 0.0
-                  }
-
-                  acc3 +. in_val *. k_val
-                })
-              })
-            })
-          })
-        })
-      })
-    })
-
-  Ok(Tensor(data: output, shape: [n, c_out, out_h, out_w]))
+  Ok(Tensor(data: list.reverse(output), shape: [n, c_out, out_h, out_w]))
 }
 
-/// Max pooling 2D
+/// Full conv loop: batch -> output_channel -> oh -> ow
+fn conv2d_full_loop(
+  in_arr: ErlangArray,
+  k_arr: ErlangArray,
+  n: Int,
+  c_in: Int,
+  c_out: Int,
+  h: Int,
+  w: Int,
+  kh: Int,
+  kw: Int,
+  in_spatial: Int,
+  in_batch_size: Int,
+  k_spatial: Int,
+  k_filter_size: Int,
+  stride_h: Int,
+  stride_w: Int,
+  pad_h: Int,
+  pad_w: Int,
+  out_h: Int,
+  out_w: Int,
+  batch: Int,
+  oc: Int,
+  oh: Int,
+  ow: Int,
+  acc: List(Float),
+) -> List(Float) {
+  case batch >= n {
+    True -> acc
+    False -> {
+      case oc >= c_out {
+        True -> conv2d_full_loop(
+          in_arr, k_arr, n, c_in, c_out, h, w, kh, kw,
+          in_spatial, in_batch_size, k_spatial, k_filter_size,
+          stride_h, stride_w, pad_h, pad_w, out_h, out_w,
+          batch + 1, 0, 0, 0, acc
+        )
+        False -> {
+          case oh >= out_h {
+            True -> conv2d_full_loop(
+              in_arr, k_arr, n, c_in, c_out, h, w, kh, kw,
+              in_spatial, in_batch_size, k_spatial, k_filter_size,
+              stride_h, stride_w, pad_h, pad_w, out_h, out_w,
+              batch, oc + 1, 0, 0, acc
+            )
+            False -> {
+              case ow >= out_w {
+                True -> conv2d_full_loop(
+                  in_arr, k_arr, n, c_in, c_out, h, w, kh, kw,
+                  in_spatial, in_batch_size, k_spatial, k_filter_size,
+                  stride_h, stride_w, pad_h, pad_w, out_h, out_w,
+                  batch, oc, oh + 1, 0, acc
+                )
+                False -> {
+                  let batch_offset = batch * in_batch_size
+                  let filter_offset = oc * k_filter_size
+                  let row = oh * stride_h - pad_h
+                  let col = ow * stride_w - pad_w
+
+                  // Sum over all input channels
+                  let val = conv2d_full_channels(
+                    in_arr, k_arr, c_in, h, w, kh, kw,
+                    in_spatial, k_spatial, batch_offset, filter_offset,
+                    row, col, 0, 0.0
+                  )
+
+                  conv2d_full_loop(
+                    in_arr, k_arr, n, c_in, c_out, h, w, kh, kw,
+                    in_spatial, in_batch_size, k_spatial, k_filter_size,
+                    stride_h, stride_w, pad_h, pad_w, out_h, out_w,
+                    batch, oc, oh, ow + 1, [val, ..acc]
+                  )
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+/// Sum over input channels for full conv
+fn conv2d_full_channels(
+  in_arr: ErlangArray,
+  k_arr: ErlangArray,
+  c_in: Int,
+  h: Int,
+  w: Int,
+  kh: Int,
+  kw: Int,
+  in_spatial: Int,
+  k_spatial: Int,
+  batch_offset: Int,
+  filter_offset: Int,
+  row: Int,
+  col: Int,
+  ic: Int,
+  acc: Float,
+) -> Float {
+  case ic >= c_in {
+    True -> acc
+    False -> {
+      let ch_offset = batch_offset + ic * in_spatial
+      let k_ch_offset = filter_offset + ic * k_spatial
+
+      let sum = conv2d_kernel_sum(
+        in_arr, k_arr, h, w, kh, kw, ch_offset, k_ch_offset, row, col, 0, 0, 0.0
+      )
+
+      conv2d_full_channels(
+        in_arr, k_arr, c_in, h, w, kh, kw,
+        in_spatial, k_spatial, batch_offset, filter_offset,
+        row, col, ic + 1, acc +. sum
+      )
+    }
+  }
+}
+
+/// Max pooling 2D - OPTIMIZED with O(1) array access
 /// Input: [H, W] or [N, C, H, W]
 /// Output: [H_out, W_out] or [N, C, H_out, W_out]
 pub fn max_pool2d(
@@ -1815,37 +2020,19 @@ pub fn max_pool2d(
   stride_w: Int,
 ) -> Result(Tensor, TensorError) {
   let shp = shape(input)
+  let arr = list_to_array_ffi(get_data(input))
 
   case shp {
     [h, w] -> {
       let out_h = { h - pool_h } / stride_h + 1
       let out_w = { w - pool_w } / stride_w + 1
-      let data = get_data(input)
 
-      let output =
-        list.range(0, out_h - 1)
-        |> list.flat_map(fn(oh) {
-          list.range(0, out_w - 1)
-          |> list.map(fn(ow) {
-            let row = oh * stride_h
-            let col = ow * stride_w
-            let patch = extract_patch(data, h, w, row, col, pool_h, pool_w)
+      let output = pool2d_loop(
+        arr, h, w, pool_h, pool_w, stride_h, stride_w,
+        out_h, out_w, 0, 0, 0, True, []
+      )
 
-            // Find max in patch
-            case patch {
-              [first, ..rest] ->
-                list.fold(rest, first, fn(acc, v) {
-                  case v >. acc {
-                    True -> v
-                    False -> acc
-                  }
-                })
-              [] -> 0.0
-            }
-          })
-        })
-
-      Ok(Tensor(data: output, shape: [out_h, out_w]))
+      Ok(Tensor(data: list.reverse(output), shape: [out_h, out_w]))
     }
 
     [n, c, h, w] -> {
@@ -1853,58 +2040,181 @@ pub fn max_pool2d(
       let out_w = { w - pool_w } / stride_w + 1
       let spatial_size = h * w
       let batch_size = c * spatial_size
-      let data = get_data(input)
 
-      let output =
-        list.range(0, n - 1)
-        |> list.flat_map(fn(batch) {
-          list.range(0, c - 1)
-          |> list.flat_map(fn(channel) {
-            let base = batch * batch_size + channel * spatial_size
+      let output = pool4d_loop(
+        arr, n, c, h, w, pool_h, pool_w, stride_h, stride_w,
+        spatial_size, batch_size, out_h, out_w,
+        0, 0, 0, 0, True, []
+      )
 
-            list.range(0, out_h - 1)
-            |> list.flat_map(fn(oh) {
-              list.range(0, out_w - 1)
-              |> list.map(fn(ow) {
-                let row = oh * stride_h
-                let col = ow * stride_w
-
-                // Find max in pool window
-                list.range(0, pool_h - 1)
-                |> list.fold(-1.0e308, fn(max_val, pr) {
-                  list.range(0, pool_w - 1)
-                  |> list.fold(max_val, fn(curr_max, pc) {
-                    let r = row + pr
-                    let c_pos = col + pc
-                    case r < h && c_pos < w {
-                      True -> {
-                        let idx = base + r * w + c_pos
-                        case list_at_float(data, idx) {
-                          Ok(v) ->
-                            case v >. curr_max {
-                              True -> v
-                              False -> curr_max
-                            }
-                          Error(_) -> curr_max
-                        }
-                      }
-                      False -> curr_max
-                    }
-                  })
-                })
-              })
-            })
-          })
-        })
-
-      Ok(Tensor(data: output, shape: [n, c, out_h, out_w]))
+      Ok(Tensor(data: list.reverse(output), shape: [n, c, out_h, out_w]))
     }
 
     _ -> Error(InvalidShape(reason: "max_pool2d requires 2D or 4D tensor"))
   }
 }
 
+/// 2D pooling loop (tail recursive)
+fn pool2d_loop(
+  arr: ErlangArray,
+  h: Int,
+  w: Int,
+  pool_h: Int,
+  pool_w: Int,
+  stride_h: Int,
+  stride_w: Int,
+  out_h: Int,
+  out_w: Int,
+  oh: Int,
+  ow: Int,
+  base: Int,
+  is_max: Bool,
+  acc: List(Float),
+) -> List(Float) {
+  case oh >= out_h {
+    True -> acc
+    False -> {
+      case ow >= out_w {
+        True -> pool2d_loop(
+          arr, h, w, pool_h, pool_w, stride_h, stride_w,
+          out_h, out_w, oh + 1, 0, base, is_max, acc
+        )
+        False -> {
+          let row = oh * stride_h
+          let col = ow * stride_w
+
+          let val = pool_window(
+            arr, w, row, col, pool_h, pool_w, base, 0, 0, is_max,
+            case is_max { True -> -1.0e308 False -> 0.0 }
+          )
+
+          let final_val = case is_max {
+            True -> val
+            False -> val /. int.to_float(pool_h * pool_w)
+          }
+
+          pool2d_loop(
+            arr, h, w, pool_h, pool_w, stride_h, stride_w,
+            out_h, out_w, oh, ow + 1, base, is_max, [final_val, ..acc]
+          )
+        }
+      }
+    }
+  }
+}
+
+/// 4D pooling loop: batch -> channel -> oh -> ow
+fn pool4d_loop(
+  arr: ErlangArray,
+  n: Int,
+  c: Int,
+  h: Int,
+  w: Int,
+  pool_h: Int,
+  pool_w: Int,
+  stride_h: Int,
+  stride_w: Int,
+  spatial_size: Int,
+  batch_size: Int,
+  out_h: Int,
+  out_w: Int,
+  batch: Int,
+  channel: Int,
+  oh: Int,
+  ow: Int,
+  is_max: Bool,
+  acc: List(Float),
+) -> List(Float) {
+  case batch >= n {
+    True -> acc
+    False -> {
+      case channel >= c {
+        True -> pool4d_loop(
+          arr, n, c, h, w, pool_h, pool_w, stride_h, stride_w,
+          spatial_size, batch_size, out_h, out_w,
+          batch + 1, 0, 0, 0, is_max, acc
+        )
+        False -> {
+          case oh >= out_h {
+            True -> pool4d_loop(
+              arr, n, c, h, w, pool_h, pool_w, stride_h, stride_w,
+              spatial_size, batch_size, out_h, out_w,
+              batch, channel + 1, 0, 0, is_max, acc
+            )
+            False -> {
+              case ow >= out_w {
+                True -> pool4d_loop(
+                  arr, n, c, h, w, pool_h, pool_w, stride_h, stride_w,
+                  spatial_size, batch_size, out_h, out_w,
+                  batch, channel, oh + 1, 0, is_max, acc
+                )
+                False -> {
+                  let base = batch * batch_size + channel * spatial_size
+                  let row = oh * stride_h
+                  let col = ow * stride_w
+
+                  let val = pool_window(
+                    arr, w, row, col, pool_h, pool_w, base, 0, 0, is_max,
+                    case is_max { True -> -1.0e308 False -> 0.0 }
+                  )
+
+                  let final_val = case is_max {
+                    True -> val
+                    False -> val /. int.to_float(pool_h * pool_w)
+                  }
+
+                  pool4d_loop(
+                    arr, n, c, h, w, pool_h, pool_w, stride_h, stride_w,
+                    spatial_size, batch_size, out_h, out_w,
+                    batch, channel, oh, ow + 1, is_max, [final_val, ..acc]
+                  )
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+/// Pool over a window - returns max or sum depending on is_max
+fn pool_window(
+  arr: ErlangArray,
+  w: Int,
+  row: Int,
+  col: Int,
+  pool_h: Int,
+  pool_w: Int,
+  base: Int,
+  pr: Int,
+  pc: Int,
+  is_max: Bool,
+  acc: Float,
+) -> Float {
+  case pr >= pool_h {
+    True -> acc
+    False -> {
+      case pc >= pool_w {
+        True -> pool_window(arr, w, row, col, pool_h, pool_w, base, pr + 1, 0, is_max, acc)
+        False -> {
+          let idx = base + { row + pr } * w + { col + pc }
+          let val = array_get_ffi(arr, idx)
+
+          let new_acc = case is_max {
+            True -> case val >. acc { True -> val False -> acc }
+            False -> acc +. val
+          }
+
+          pool_window(arr, w, row, col, pool_h, pool_w, base, pr, pc + 1, is_max, new_acc)
+        }
+      }
+    }
+  }
+}
+
 /// Average pooling 2D
+/// Average pooling 2D - OPTIMIZED with O(1) array access
 pub fn avg_pool2d(
   input: Tensor,
   pool_h: Int,
@@ -1913,30 +2223,19 @@ pub fn avg_pool2d(
   stride_w: Int,
 ) -> Result(Tensor, TensorError) {
   let shp = shape(input)
-  let pool_size = int.to_float(pool_h * pool_w)
+  let arr = list_to_array_ffi(get_data(input))
 
   case shp {
     [h, w] -> {
       let out_h = { h - pool_h } / stride_h + 1
       let out_w = { w - pool_w } / stride_w + 1
-      let data = get_data(input)
 
-      let output =
-        list.range(0, out_h - 1)
-        |> list.flat_map(fn(oh) {
-          list.range(0, out_w - 1)
-          |> list.map(fn(ow) {
-            let row = oh * stride_h
-            let col = ow * stride_w
-            let patch = extract_patch(data, h, w, row, col, pool_h, pool_w)
+      let output = pool2d_loop(
+        arr, h, w, pool_h, pool_w, stride_h, stride_w,
+        out_h, out_w, 0, 0, 0, False, []
+      )
 
-            // Average of patch
-            let sum = list.fold(patch, 0.0, fn(acc, v) { acc +. v })
-            sum /. pool_size
-          })
-        })
-
-      Ok(Tensor(data: output, shape: [out_h, out_w]))
+      Ok(Tensor(data: list.reverse(output), shape: [out_h, out_w]))
     }
 
     [n, c, h, w] -> {
@@ -1944,50 +2243,14 @@ pub fn avg_pool2d(
       let out_w = { w - pool_w } / stride_w + 1
       let spatial_size = h * w
       let batch_size = c * spatial_size
-      let data = get_data(input)
 
-      let output =
-        list.range(0, n - 1)
-        |> list.flat_map(fn(batch) {
-          list.range(0, c - 1)
-          |> list.flat_map(fn(channel) {
-            let base = batch * batch_size + channel * spatial_size
+      let output = pool4d_loop(
+        arr, n, c, h, w, pool_h, pool_w, stride_h, stride_w,
+        spatial_size, batch_size, out_h, out_w,
+        0, 0, 0, 0, False, []
+      )
 
-            list.range(0, out_h - 1)
-            |> list.flat_map(fn(oh) {
-              list.range(0, out_w - 1)
-              |> list.map(fn(ow) {
-                let row = oh * stride_h
-                let col = ow * stride_w
-
-                // Sum pool window
-                let sum =
-                  list.range(0, pool_h - 1)
-                  |> list.fold(0.0, fn(s, pr) {
-                    list.range(0, pool_w - 1)
-                    |> list.fold(s, fn(curr, pc) {
-                      let r = row + pr
-                      let c_pos = col + pc
-                      case r < h && c_pos < w {
-                        True -> {
-                          let idx = base + r * w + c_pos
-                          case list_at_float(data, idx) {
-                            Ok(v) -> curr +. v
-                            Error(_) -> curr
-                          }
-                        }
-                        False -> curr
-                      }
-                    })
-                  })
-
-                sum /. pool_size
-              })
-            })
-          })
-        })
-
-      Ok(Tensor(data: output, shape: [n, c, out_h, out_w]))
+      Ok(Tensor(data: list.reverse(output), shape: [n, c, out_h, out_w]))
     }
 
     _ -> Error(InvalidShape(reason: "avg_pool2d requires 2D or 4D tensor"))
