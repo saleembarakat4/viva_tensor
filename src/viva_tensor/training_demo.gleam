@@ -29,10 +29,12 @@ pub fn main() {
   // 1. Criar Dados de Treinamento
   let tape = autograd.new_tape()
   
-  // x = [1, 2, 3, 4, 5]
-  // y = [2, 4, 6, 8, 10] (aproximado)
+  // Reshape para [5, 1] (5 amostras, 1 feature)
   let x_data = tensor.from_list([1.0, 2.0, 3.0, 4.0, 5.0])
+  let assert Ok(x_data) = tensor.reshape(x_data, [5, 1])
+  
   let y_data = tensor.from_list([2.1, 3.9, 6.2, 8.1, 10.3])
+  let assert Ok(y_data) = tensor.reshape(y_data, [5, 1])
 
   let Traced(x, tape1) = autograd.new_variable(tape, x_data)
   let Traced(y, tape2) = autograd.new_variable(tape1, y_data)

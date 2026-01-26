@@ -2,6 +2,7 @@ import gleam/dict.{type Dict}
 import gleam/list
 import gleam/result
 import gleam/int
+import gleam/string
 import viva_tensor/tensor.{type Tensor}
 
 /// Identificador único para cada nó no grafo computacional
@@ -61,15 +62,34 @@ pub fn sequence(
   layer_fn(tape, var)
 }
 
-/// Adição rastreada: c = a + b
+/// Adição rastreada: c = a + b (suporta broadcasting)
 pub fn add(tape: Tape, a: Variable, b: Variable) -> Result(Traced(Variable), tensor.TensorError) {
-  use res_data <- result.try(tensor.add(a.data, b.data))
+  use res_data <- result.try(tensor.add_broadcast(a.data, b.data))
   
   let res_id = tape.next_id
   
-  // Backward: y = a + b => dy/da = 1, dy/db = 1
+  // Backward: y = a + b
+  // Se houve broadcast, precisamos somar o gradiente nas dimensões expandidas
   let backward = fn(grad: Tensor) {
-    [#(a.id, grad), #(b.id, grad)]
+    let grad_a = case grad.shape == a.data.shape {
+      True -> grad
+      False -> {
+        // Redução simplificada: se rank difere ou dimensão é 1, somamos
+        // No MVP, se a é [4] e grad é [5, 4], sum_axis(0) resolve
+        let assert Ok(res) = tensor.sum_axis(grad, 0)
+        res
+      }
+    }
+    
+    let grad_b = case grad.shape == b.data.shape {
+      True -> grad
+      False -> {
+        let assert Ok(res) = tensor.sum_axis(grad, 0)
+        res
+      }
+    }
+    
+    [#(a.id, grad_a), #(b.id, grad_b)]
   }
   
   let new_ops = dict.insert(tape.operations, res_id, backward)
@@ -252,8 +272,18 @@ pub fn backward(tape: Tape, loss: Variable) -> Result(Dict(NodeId, Tensor), Stri
               case dict.get(acc_grads, pid) {
                 Error(_) -> dict.insert(acc_grads, pid, pgrad)
                 Ok(existing) -> {
-                  let assert Ok(sum) = tensor.add(existing, pgrad)
-                  dict.insert(acc_grads, pid, sum)
+                  case existing.shape == pgrad.shape {
+                    True -> {
+                      let assert Ok(sum) = tensor.add(existing, pgrad)
+                      dict.insert(acc_grads, pid, sum)
+                    }
+                    False -> {
+                      let msg = "ShapeMismatch no nó " <> int.to_string(pid) 
+                        <> ": existing=" <> string_shape(existing.shape) 
+                        <> ", new=" <> string_shape(pgrad.shape)
+                      panic as msg
+                    }
+                  }
                 }
               }
             })
@@ -264,4 +294,8 @@ pub fn backward(tape: Tape, loss: Variable) -> Result(Dict(NodeId, Tensor), Stri
   })
   
   Ok(final_grads)
+}
+
+fn string_shape(shape: List(Int)) -> String {
+  "[" <> string.join(list.map(shape, int.to_string), with: ", ") <> "]"
 }
