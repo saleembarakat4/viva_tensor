@@ -44,9 +44,9 @@ flowchart LR
     end
 
     subgraph Memory["🧠 Virtual Memory"]
-        VRAM[VRAM (24GB)]
-        RAM[RAM (32GB)]
-        DISK[NVMe (1TB)]
+        VRAM["VRAM 24GB"]
+        RAM["RAM 32GB"]
+        DISK["NVMe 1TB"]
         VRAM <--> RAM
         RAM <--> DISK
     end
