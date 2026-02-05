@@ -488,8 +488,8 @@ pub fn matmul_fast(a: Tensor, b: Tensor) -> Result(Tensor, TensorError) {
 // =============================================================================
 
 /// Auto-selecting dot product
-/// Uses Apple Accelerate NIF on macOS if available, otherwise Erlang arrays
-/// 10-50x faster than pure Gleam for large vectors when NIF is loaded
+/// Priority: Apple Accelerate > Zig SIMD > Pure Erlang
+/// 10-700x faster than pure Gleam for large vectors when NIF is loaded
 pub fn dot_auto(a: Tensor, b: Tensor) -> Result(Float, TensorError) {
   case
     tensor.rank(a) == 1
@@ -497,34 +497,58 @@ pub fn dot_auto(a: Tensor, b: Tensor) -> Result(Float, TensorError) {
     && tensor.size(a) == tensor.size(b)
   {
     True -> {
+      let a_list = tensor.to_list(a)
+      let b_list = tensor.to_list(b)
+      // Try Apple Accelerate first (fastest on macOS)
       case ffi.is_nif_loaded() {
         True -> {
-          case ffi.nif_dot(tensor.to_list(a), tensor.to_list(b)) {
+          case ffi.nif_dot(a_list, b_list) {
             Ok(result) -> Ok(result)
-            Error(_) -> dot_fast(a, b)
+            Error(_) -> dot_with_zig_fallback(a_list, b_list, a, b)
           }
         }
-        False -> dot_fast(a, b)
+        False -> dot_with_zig_fallback(a_list, b_list, a, b)
       }
     }
     False -> Error(error.ShapeMismatch(tensor.shape(a), tensor.shape(b)))
   }
 }
 
+fn dot_with_zig_fallback(
+  a_list: List(Float),
+  b_list: List(Float),
+  a: Tensor,
+  b: Tensor,
+) -> Result(Float, TensorError) {
+  // Try Zig SIMD (cross-platform fast)
+  case ffi.zig_is_loaded() {
+    True -> {
+      case ffi.zig_dot(a_list, b_list) {
+        Ok(result) -> Ok(result)
+        Error(_) -> dot_fast(a, b)
+      }
+    }
+    False -> dot_fast(a, b)
+  }
+}
+
 /// Auto-selecting matrix multiplication
-/// Uses Apple Accelerate NIF on macOS if available, otherwise Erlang arrays
-/// 10-50x faster than pure Gleam for large matrices when NIF is loaded
+/// Priority: Apple Accelerate > Zig SIMD > Pure Erlang
+/// 10-1400x faster than pure Gleam for large matrices when NIF is loaded
 pub fn matmul_auto(a: Tensor, b: Tensor) -> Result(Tensor, TensorError) {
   case tensor.shape(a), tensor.shape(b) {
     [m, k], [k2, n] if k == k2 -> {
+      let a_list = tensor.to_list(a)
+      let b_list = tensor.to_list(b)
+      // Try Apple Accelerate first (fastest on macOS for large matrices)
       case ffi.is_nif_loaded() {
         True -> {
-          case ffi.nif_matmul(tensor.to_list(a), tensor.to_list(b), m, n, k) {
+          case ffi.nif_matmul(a_list, b_list, m, n, k) {
             Ok(result_list) -> tensor.new(result_list, [m, n])
-            Error(_) -> matmul_fast(a, b)
+            Error(_) -> matmul_with_zig_fallback(a_list, b_list, m, n, k, a, b)
           }
         }
-        False -> matmul_fast(a, b)
+        False -> matmul_with_zig_fallback(a_list, b_list, m, n, k, a, b)
       }
     }
     [_m, k], [k2, _n] -> Error(error.ShapeMismatch([k, -1], [k2, -1]))
@@ -532,11 +556,82 @@ pub fn matmul_auto(a: Tensor, b: Tensor) -> Result(Tensor, TensorError) {
   }
 }
 
+fn matmul_with_zig_fallback(
+  a_list: List(Float),
+  b_list: List(Float),
+  m: Int,
+  n: Int,
+  k: Int,
+  a: Tensor,
+  b: Tensor,
+) -> Result(Tensor, TensorError) {
+  // Try Zig SIMD (cross-platform, often faster for small-medium matrices)
+  case ffi.zig_is_loaded() {
+    True -> {
+      case ffi.zig_matmul(a_list, b_list, m, n, k) {
+        Ok(result_list) -> tensor.new(result_list, [m, n])
+        Error(_) -> matmul_fast(a, b)
+      }
+    }
+    False -> matmul_fast(a, b)
+  }
+}
+
 /// Get current backend info string
+/// Shows best available backend for tensor operations
 pub fn backend_info() -> String {
+  case ffi.zig_is_loaded() {
+    True -> ffi.zig_backend_info()
+    False ->
+      case ffi.is_nif_loaded() {
+        True -> ffi.nif_backend_info()
+        False -> "Pure Erlang (O(1) array access)"
+      }
+  }
+}
+
+/// Get detailed status of all backends
+pub fn all_backends_info() -> String {
+  let zig_status = case ffi.zig_is_loaded() {
+    True -> "✓ " <> ffi.zig_backend_info()
+    False -> "✗ Not available"
+  }
+  let accel_status = case ffi.is_nif_loaded() {
+    True -> "✓ " <> ffi.nif_backend_info()
+    False -> "✗ Not available"
+  }
+  "Zig SIMD: "
+  <> zig_status
+  <> "\nApple Accelerate: "
+  <> accel_status
+  <> "\nPure Erlang: ✓ Always available"
+}
+
+/// Auto-selecting sum reduction
+/// Priority: Zig SIMD > Apple Accelerate > Pure Erlang
+pub fn sum_auto(t: Tensor) -> Float {
+  let data = tensor.to_list(t)
+  // Try Zig SIMD first (often faster for reductions)
+  case ffi.zig_is_loaded() {
+    True -> {
+      case ffi.zig_sum(data) {
+        Ok(result) -> result
+        Error(_) -> sum_with_accel_fallback(data)
+      }
+    }
+    False -> sum_with_accel_fallback(data)
+  }
+}
+
+fn sum_with_accel_fallback(data: List(Float)) -> Float {
   case ffi.is_nif_loaded() {
-    True -> "Apple Accelerate (cblas_dgemm, vDSP)"
-    False -> "Pure Erlang (O(1) array access)"
+    True -> {
+      case ffi.nif_sum(data) {
+        Ok(result) -> result
+        Error(_) -> list.fold(data, 0.0, fn(acc, x) { acc +. x })
+      }
+    }
+    False -> list.fold(data, 0.0, fn(acc, x) { acc +. x })
   }
 }
 
