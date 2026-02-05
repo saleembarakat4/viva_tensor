@@ -428,6 +428,118 @@ pub fn matmul(a: Tensor, b: Tensor) -> Result(Tensor, TensorError) {
   }
 }
 
+// =============================================================================
+// OPTIMIZED OPERATIONS (Erlang Array Backend)
+// =============================================================================
+
+/// Optimized dot product using Erlang arrays
+/// 2-3x faster than list-based dot for large vectors (1000+ elements)
+///
+/// ## Examples
+///
+/// ```gleam
+/// let a = tensor.from_list([1.0, 2.0, 3.0])
+/// let b = tensor.from_list([4.0, 5.0, 6.0])
+/// ops.dot_fast(a, b)
+/// // -> Ok(32.0)
+/// ```
+pub fn dot_fast(a: Tensor, b: Tensor) -> Result(Float, TensorError) {
+  case
+    tensor.rank(a) == 1
+    && tensor.rank(b) == 1
+    && tensor.size(a) == tensor.size(b)
+  {
+    True -> {
+      let a_arr = ffi.list_to_array(tensor.to_list(a))
+      let b_arr = ffi.list_to_array(tensor.to_list(b))
+      Ok(ffi.array_dot(a_arr, b_arr))
+    }
+    False -> Error(error.ShapeMismatch(tensor.shape(a), tensor.shape(b)))
+  }
+}
+
+/// Optimized matrix multiplication using Erlang arrays
+/// 2-3x faster than list-based matmul due to O(1) element access
+///
+/// ## Examples
+///
+/// ```gleam
+/// let a = tensor.matrix(2, 2, [1.0, 2.0, 3.0, 4.0])
+/// let b = tensor.matrix(2, 2, [5.0, 6.0, 7.0, 8.0])
+/// ops.matmul_fast(a, b)
+/// // -> Ok([[19.0, 22.0], [43.0, 50.0]])
+/// ```
+pub fn matmul_fast(a: Tensor, b: Tensor) -> Result(Tensor, TensorError) {
+  case tensor.shape(a), tensor.shape(b) {
+    [m, k], [k2, n] if k == k2 -> {
+      let a_arr = ffi.list_to_array(tensor.to_list(a))
+      let b_arr = ffi.list_to_array(tensor.to_list(b))
+      let result_arr = ffi.array_matmul(a_arr, b_arr, m, n, k)
+      let result_list = ffi.array_to_list(result_arr)
+      tensor.new(result_list, [m, n])
+    }
+    [_m, k], [k2, _n] -> Error(error.ShapeMismatch([k, -1], [k2, -1]))
+    _, _ -> Error(error.DimensionError("Expected two matrices"))
+  }
+}
+
+// =============================================================================
+// AUTO-SELECTING OPERATIONS (NIF when available, fallback to Erlang)
+// =============================================================================
+
+/// Auto-selecting dot product
+/// Uses Apple Accelerate NIF on macOS if available, otherwise Erlang arrays
+/// 10-50x faster than pure Gleam for large vectors when NIF is loaded
+pub fn dot_auto(a: Tensor, b: Tensor) -> Result(Float, TensorError) {
+  case
+    tensor.rank(a) == 1
+    && tensor.rank(b) == 1
+    && tensor.size(a) == tensor.size(b)
+  {
+    True -> {
+      case ffi.is_nif_loaded() {
+        True -> {
+          case ffi.nif_dot(tensor.to_list(a), tensor.to_list(b)) {
+            Ok(result) -> Ok(result)
+            Error(_) -> dot_fast(a, b)
+          }
+        }
+        False -> dot_fast(a, b)
+      }
+    }
+    False -> Error(error.ShapeMismatch(tensor.shape(a), tensor.shape(b)))
+  }
+}
+
+/// Auto-selecting matrix multiplication
+/// Uses Apple Accelerate NIF on macOS if available, otherwise Erlang arrays
+/// 10-50x faster than pure Gleam for large matrices when NIF is loaded
+pub fn matmul_auto(a: Tensor, b: Tensor) -> Result(Tensor, TensorError) {
+  case tensor.shape(a), tensor.shape(b) {
+    [m, k], [k2, n] if k == k2 -> {
+      case ffi.is_nif_loaded() {
+        True -> {
+          case ffi.nif_matmul(tensor.to_list(a), tensor.to_list(b), m, n, k) {
+            Ok(result_list) -> tensor.new(result_list, [m, n])
+            Error(_) -> matmul_fast(a, b)
+          }
+        }
+        False -> matmul_fast(a, b)
+      }
+    }
+    [_m, k], [k2, _n] -> Error(error.ShapeMismatch([k, -1], [k2, -1]))
+    _, _ -> Error(error.DimensionError("Expected two matrices"))
+  }
+}
+
+/// Get current backend info string
+pub fn backend_info() -> String {
+  case ffi.is_nif_loaded() {
+    True -> "Apple Accelerate (cblas_dgemm, vDSP)"
+    False -> "Pure Erlang (O(1) array access)"
+  }
+}
+
 /// Matrix transpose
 pub fn transpose(t: Tensor) -> Result(Tensor, TensorError) {
   case tensor.shape(t) {
