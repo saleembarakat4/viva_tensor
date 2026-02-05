@@ -434,10 +434,10 @@ pub fn pad2d_test() {
 pub fn conv2d_simple_test() {
   // 3x3 input
   let input =
-    tensor.Tensor(
-      data: [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0],
-      shape: [3, 3],
-    )
+    tensor.Tensor(data: [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0], shape: [
+      3,
+      3,
+    ])
 
   // 2x2 kernel (all ones = sum)
   let kernel = tensor.Tensor(data: [1.0, 1.0, 1.0, 1.0], shape: [2, 2])

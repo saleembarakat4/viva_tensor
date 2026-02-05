@@ -1,8 +1,8 @@
 import gleam/dict
 import gleeunit
 import gleeunit/should
-import viva_tensor/autograd.{Traced}
-import viva_tensor/tensor
+import viva_tensor/core/tensor
+import viva_tensor/nn/autograd.{Traced}
 
 pub fn main() {
   gleeunit.main()
