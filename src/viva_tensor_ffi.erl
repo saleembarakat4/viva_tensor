@@ -47,22 +47,27 @@ dot_loop(A, B, Idx, Size, Acc) ->
     Val = array:get(Idx, A) * array:get(Idx, B),
     dot_loop(A, B, Idx + 1, Size, Acc + Val).
 
-%% Matrix multiplication
+%% Matrix multiplication (ikj loop order for cache locality)
 %% matmul(A, B, M, N, K) where A is MxK, B is KxN -> Result MxN
 array_matmul(A, B, M, N, K) ->
-    Result = [
-        begin
-            RowStart = I * K,
-            lists:foldl(fun(KIdx, Acc) ->
-                AVal = array:get(RowStart + KIdx, A),
-                BVal = array:get(KIdx * N + J, B),
-                Acc + AVal * BVal
-            end, 0.0, lists:seq(0, K - 1))
-        end
-        || I <- lists:seq(0, M - 1),
-           J <- lists:seq(0, N - 1)
-    ],
-    array:from_list(Result).
+    %% Initialize result as zero-filled array
+    C0 = array:new([{size, M * N}, {fixed, true}, {default, 0.0}]),
+    %% ikj loop: for each row i, for each k, scatter A[i,k]*B[k,j] across j
+    %% This gives sequential access to B's row (cache-friendly)
+    C = lists:foldl(fun(I, CAcc) ->
+        RowStart = I * K,
+        lists:foldl(fun(KIdx, CAcc2) ->
+            AVal = array:get(RowStart + KIdx, A),
+            BRowStart = KIdx * N,
+            CRowStart = I * N,
+            lists:foldl(fun(J, CAcc3) ->
+                OldVal = array:get(CRowStart + J, CAcc3),
+                BVal = array:get(BRowStart + J, B),
+                array:set(CRowStart + J, OldVal + AVal * BVal, CAcc3)
+            end, CAcc2, lists:seq(0, N - 1))
+        end, CAcc, lists:seq(0, K - 1))
+    end, C0, lists:seq(0, M - 1)),
+    C.
 
 %% Sum all elements in array
 array_sum(Array) ->
