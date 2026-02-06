@@ -1,19 +1,33 @@
-//// Flash Attention - O(n) Memory Attention
+//// Flash Attention - IO-Aware Exact Attention in O(n) Memory
 ////
-//// REVOLUCIONÁRIO: Reduz memória de O(n²) para O(n)!
-//// https://arxiv.org/abs/2205.14135 (Tri Dao, 2022)
+//// "The key insight is that memory bandwidth, not FLOPs, is the bottleneck."
+////   — Tri Dao, channeling every GPU programmer's frustration
 ////
-//// PROBLEMA:
-//// - Attention padrão: Q @ K^T @ V = O(n²) memória
-//// - Para n=8192 (contexto longo): 8192² = 67M elementos = 256MB por cabeça!
-//// - 32 cabeças = 8GB só para attention scores
+//// References:
+//// - Dao et al. (2022). "FlashAttention: Fast and Memory-Efficient Exact
+////   Attention with IO-Awareness." https://arxiv.org/abs/2205.14135
+//// - Dao (2023). "FlashAttention-2: Faster Attention with Better Parallelism
+////   and Work Partitioning." https://arxiv.org/abs/2307.08691
+//// - Rabe & Staats (2021). "Self-attention Does Not Need O(n^2) Memory."
+////   The theoretical foundation that made Flash Attention possible.
 ////
-//// SOLUÇÃO:
-//// - Processar em TILES (blocos)
-//// - Nunca materializar matriz n×n completa
-//// - Online softmax: atualiza estatísticas incrementalmente
+//// The Problem:
+////   Standard attention: scores = Q @ K^T  (this creates an n x n matrix!)
+////   For n=8192: 67M elements = 256MB per head. 32 heads = 8GB. Ouch.
 ////
-//// RESULTADO: 2-4x mais rápido, O(n) memória!
+//// The Solution:
+////   Process in TILES. Never materialize the full n x n matrix.
+////   Online softmax: update running statistics incrementally.
+////   Result: O(n) memory, 2-4x faster, and EXACT (not an approximation!).
+////
+//// Why it works (IO-awareness):
+////   GPU has fast SRAM (on-chip) and slow HBM (off-chip).
+////   Standard attention: write n^2 elements to HBM, read them back. Slow.
+////   Flash attention: keep working set in SRAM, only read/write O(n) to HBM.
+////   Memory bandwidth wins over raw FLOPs. Every. Single. Time.
+////
+//// This implementation is a pure Gleam demonstration. For production,
+//// you'd want CUDA kernels that fuse the operations. But the math is the same.
 
 import gleam/float
 import gleam/int
@@ -21,73 +35,98 @@ import gleam/io
 import gleam/list
 import viva_tensor/tensor.{type Tensor, Tensor}
 
-// ============================================================================
-// TIPOS
-// ============================================================================
+// -------------------------------------------------------------------------
+// Configuration Types
+// -------------------------------------------------------------------------
 
-/// Configuração Flash Attention
+/// Flash Attention configuration.
+///
+/// Block sizes determine the tile dimensions. Larger blocks = fewer iterations
+/// but more SRAM usage. The sweet spot depends on your GPU's SRAM size.
+/// For A100: block_q=128, block_kv=128 works well.
+/// For consumer GPUs: 64x64 is safer.
 pub type FlashConfig {
   FlashConfig(
-    /// Tamanho do tile para Q (linhas)
+    /// Block size for Q dimension (rows of attention matrix)
     block_q: Int,
-    /// Tamanho do tile para KV (colunas)
+    /// Block size for KV dimension (columns of attention matrix)
     block_kv: Int,
-    /// Scaling factor (1/sqrt(d))
+    /// Scaling factor: 1/sqrt(d_k). Keeps attention weights from exploding.
     scale: Float,
-    /// Usar causal mask
+    /// Causal masking for autoregressive models (GPT-style)
     causal: Bool,
   )
 }
 
-/// Estatísticas online para softmax
+/// Running statistics for online softmax computation.
+///
+/// The magic of Flash Attention: we don't need all the scores to compute softmax.
+/// We track max (for numerical stability) and sum_exp (for normalization),
+/// updating them as we process each KV block.
+///
+/// Math: softmax(x)_i = exp(x_i - max(x)) / sum_j(exp(x_j - max(x)))
+/// We can compute this incrementally by rescaling when max changes.
 pub type OnlineStats {
   OnlineStats(
-    /// Máximo corrente (para estabilidade numérica)
+    /// Running maximum (for numerical stability in exp)
     max_val: Float,
-    /// Soma exponenciada corrente
+    /// Running sum of exp(score - max) for normalization
     sum_exp: Float,
-    /// Output acumulado
+    /// Accumulated output (will be normalized at the end)
     output: List(Float),
   )
 }
 
-/// Resultado de Flash Attention
+/// Result of Flash Attention, with memory statistics.
 pub type FlashResult {
   FlashResult(
-    /// Tensor de saída
+    /// The attention output tensor
     output: Tensor,
-    /// Memória usada (bytes)
+    /// Peak memory usage in bytes (just the tile, not the full matrix)
     memory_bytes: Int,
-    /// Memória economizada vs naive (%)
+    /// Percentage of memory saved vs naive attention
     memory_saved_percent: Float,
   )
 }
 
-/// Configuração padrão
+// -------------------------------------------------------------------------
+// Configuration Builders
+// -------------------------------------------------------------------------
+
+/// Default configuration optimized for common use cases.
+///
+/// Block sizes of 64 work on most GPUs.
+/// Scale is 1/sqrt(head_dim), following the original Transformer paper.
 pub fn default_config(head_dim: Int) -> FlashConfig {
-  // Block sizes otimizados para CUDA
-  // 64-128 para Q, 64-256 para KV
   let scale = case float.square_root(int.to_float(head_dim)) {
     Ok(sqrt) -> 1.0 /. sqrt
-    Error(_) -> 0.125
-    // fallback for head_dim=64
+    Error(_) -> 0.125  // fallback for head_dim=64
   }
   FlashConfig(block_q: 64, block_kv: 64, scale: scale, causal: False)
 }
 
-/// Config para causal (autoregressive)
+/// Causal configuration for autoregressive models.
+///
+/// In causal attention, position i can only attend to positions j <= i.
+/// This is how GPT, LLaMA, and friends generate text token by token.
 pub fn causal_config(head_dim: Int) -> FlashConfig {
   FlashConfig(..default_config(head_dim), causal: True)
 }
 
-// ============================================================================
-// NAIVE ATTENTION (para comparação)
-// ============================================================================
+// -------------------------------------------------------------------------
+// Naive Attention - The O(n^2) Baseline
+// -------------------------------------------------------------------------
+//
+// This is what we're trying to avoid. Included for comparison.
+// Algorithm:
+//   1. scores = Q @ K^T          <- Creates n x n matrix (the problem)
+//   2. attn = softmax(scores * scale)
+//   3. output = attn @ V
 
-/// Attention ingênua: O(n²) memória
-/// scores = Q @ K^T
-/// attn = softmax(scores * scale)
-/// out = attn @ V
+/// Standard attention with O(n^2) memory. DON'T use for long sequences.
+///
+/// This allocates the full attention matrix. For n=8192, that's 256MB per head.
+/// Included only to show what Flash Attention saves you from.
 pub fn naive_attention(
   q: Tensor,
   k: Tensor,
@@ -104,7 +143,6 @@ pub fn naive_attention(
     _ -> seq_len
   }
 
-  // Reshape para matriz
   let q_rows = list.sized_chunk(q_data, head_dim)
   let k_rows = list.sized_chunk(k_data, head_dim)
   let v_rows = list.sized_chunk(v_data, head_dim)
@@ -112,19 +150,19 @@ pub fn naive_attention(
   let n_rows = list.length(q_rows)
   let n_cols = list.length(k_rows)
 
-  // Step 1: scores = Q @ K^T  (AQUI ESTÁ O PROBLEMA: n×n matriz!)
+  // Step 1: scores = Q @ K^T
+  // THIS is the O(n^2) memory allocation everyone complains about
   let scores =
     list.map(q_rows, fn(q_row) {
       list.map(k_rows, fn(k_row) { dot_product(q_row, k_row) *. scale })
     })
 
-  // Step 2: softmax por linha
+  // Step 2: softmax per row
   let attn = list.map(scores, softmax_row)
 
-  // Step 3: out = attn @ V
+  // Step 3: output = attn @ V
   let output =
     list.map(attn, fn(attn_row) {
-      // Weighted sum of V rows
       list.index_fold(attn_row, list.repeat(0.0, head_dim), fn(acc, weight, i) {
         let v_row = get_row(v_rows, i)
         list.map2(acc, v_row, fn(a, v) { a +. weight *. v })
@@ -132,17 +170,27 @@ pub fn naive_attention(
     })
     |> list.flatten
 
-  // Memória: n×n scores matrix (FP32)
+  // Memory: n x n attention matrix in FP32
   let memory = n_rows * n_cols * 4
 
   #(Tensor(data: output, shape: get_tensor_shape(q)), memory)
 }
 
-// ============================================================================
-// FLASH ATTENTION - O(n) Memória!
-// ============================================================================
+// -------------------------------------------------------------------------
+// Flash Attention - The O(n) Hero
+// -------------------------------------------------------------------------
+//
+// The key insight: we don't need to materialize the full attention matrix.
+// By processing in blocks and using online softmax, we get exact attention
+// with O(block_size^2) memory instead of O(n^2).
+//
+// For n=8192 with block=64: 64^2 = 4KB vs 8192^2 = 256MB. That's 64,000x less!
 
-/// Flash Attention: processa em tiles, nunca materializa n×n
+/// Flash Attention: exact attention with O(n) memory.
+///
+/// This is the algorithm that enabled 100K+ context windows in LLMs.
+/// It's not an approximation - it computes the exact same result as naive attention.
+/// The magic is in the order of computation and the online softmax trick.
 pub fn flash_attention(
   q: Tensor,
   k: Tensor,
@@ -165,12 +213,12 @@ pub fn flash_attention(
   let n_q = list.length(q_rows)
   let n_kv = list.length(k_rows)
 
-  // Processa Q em blocos
+  // Partition into blocks - this is the tiling that saves memory
   let q_blocks = list.sized_chunk(q_rows, config.block_q)
   let k_blocks = list.sized_chunk(k_rows, config.block_kv)
   let v_blocks = list.sized_chunk(v_rows, config.block_kv)
 
-  // Para cada bloco de Q, processa todos os blocos KV
+  // Process each Q block against all KV blocks
   let output =
     list.index_map(q_blocks, fn(q_block, q_block_idx) {
       process_q_block(
@@ -185,10 +233,8 @@ pub fn flash_attention(
     |> list.flatten
     |> list.flatten
 
-  // Memória Flash: apenas block_q × block_kv por vez
+  // Memory analysis: we only ever allocate one tile at a time
   let flash_memory = config.block_q * config.block_kv * 4
-
-  // Memória naive: n×n
   let naive_memory = n_q * n_kv * 4
 
   let saved =
@@ -201,7 +247,11 @@ pub fn flash_attention(
   )
 }
 
-/// Processa um bloco de Q contra todos os blocos KV
+/// Process one Q block against all KV blocks.
+///
+/// This is the outer loop of Flash Attention.
+/// For each query in the block, we maintain running softmax statistics
+/// as we iterate through the KV blocks.
 fn process_q_block(
   q_block: List(List(Float)),
   k_blocks: List(List(List(Float))),
@@ -210,31 +260,30 @@ fn process_q_block(
   q_block_idx: Int,
   head_dim: Int,
 ) -> List(List(Float)) {
-  // Inicializa estatísticas online para cada query neste bloco
+  // Initialize online stats for each query in this block
   let initial_stats =
     list.map(q_block, fn(_) {
       OnlineStats(
-        max_val: -999_999.0,
+        max_val: -999_999.0,  // Will be updated on first real score
         sum_exp: 0.0,
         output: list.repeat(0.0, head_dim),
       )
     })
 
-  // Itera sobre blocos KV, atualizando estatísticas
+  // Iterate through KV blocks, updating stats as we go
   let zipped_kv = list.zip(k_blocks, v_blocks)
 
   let final_stats =
     list.index_fold(zipped_kv, initial_stats, fn(stats, kv_pair, kv_idx) {
       let #(k_block, v_block) = kv_pair
 
-      // Aplica causal mask se necessário
+      // Causal masking: skip KV blocks entirely in the future
       case config.causal {
         True -> {
           let q_start = q_block_idx * config.block_q
           let kv_start = kv_idx * config.block_kv
-          let _kv_end = kv_start + list.length(k_block)
 
-          // Se todo o bloco KV está no futuro, pula
+          // If the entire KV block is in the future, skip it
           case kv_start > q_start + list.length(q_block) {
             True -> stats
             False -> process_kv_block(stats, q_block, k_block, v_block, config)
@@ -244,7 +293,7 @@ fn process_q_block(
       }
     })
 
-  // Normaliza outputs finais
+  // Normalize final outputs by sum_exp to complete the softmax
   list.map(final_stats, fn(s) {
     case s.sum_exp >. 0.0 {
       True -> list.map(s.output, fn(o) { o /. s.sum_exp })
@@ -253,7 +302,11 @@ fn process_q_block(
   })
 }
 
-/// Processa um bloco KV contra queries, atualiza estatísticas online
+/// Process one KV block against all queries, updating online statistics.
+///
+/// This is where the online softmax magic happens.
+/// When we encounter a new max, we rescale the running sum and output.
+/// This is numerically stable and gives exact results.
 fn process_kv_block(
   stats: List(OnlineStats),
   q_block: List(List(Float)),
@@ -262,14 +315,16 @@ fn process_kv_block(
   config: FlashConfig,
 ) -> List(OnlineStats) {
   list.map2(stats, q_block, fn(stat, q_row) {
-    // Compute scores para este query vs todos os keys do bloco
+    // Compute scores: q_row @ each k in k_block, scaled
     let scores =
       list.map(k_block, fn(k_row) { dot_product(q_row, k_row) *. config.scale })
 
     // Online softmax update
+    // Step 1: Find new max
     let new_max = list.fold(scores, stat.max_val, float.max)
 
-    // Correção para o novo máximo
+    // Step 2: Compute correction factor for previous statistics
+    // When max increases, we need to downscale previous exp values
     let correction = case stat.sum_exp >. 0.0 {
       True ->
         float.power(2.71828, stat.max_val -. new_max)
@@ -277,19 +332,20 @@ fn process_kv_block(
       False -> 1.0
     }
 
-    // Atualiza sum_exp com correção
+    // Step 3: Rescale previous sum_exp
     let corrected_sum = stat.sum_exp *. correction
 
-    // Computa novos pesos exponenciados
+    // Step 4: Compute exp(scores - new_max) for this block
     let exp_scores =
       list.map(scores, fn(s) {
         float.power(2.71828, s -. new_max)
         |> result_to_float(0.0)
       })
 
+    // Step 5: Add to running sum
     let new_sum = list.fold(exp_scores, corrected_sum, float.add)
 
-    // Atualiza output: corrige anterior + adiciona contribuição do novo bloco
+    // Step 6: Rescale previous output and add new contribution
     let corrected_output = list.map(stat.output, fn(o) { o *. correction })
 
     let new_contribution =
@@ -308,45 +364,41 @@ fn process_kv_block(
   })
 }
 
-// ============================================================================
-// BENCHMARK
-// ============================================================================
+// -------------------------------------------------------------------------
+// Benchmark - Prove That Flash Attention Delivers
+// -------------------------------------------------------------------------
 
 pub fn main() {
   benchmark_flash_attention()
 }
 
 pub fn benchmark_flash_attention() {
-  io.println(
-    "╔══════════════════════════════════════════════════════════════════╗",
-  )
-  io.println(
-    "║  FLASH ATTENTION - O(n) Memory Algorithm                         ║",
-  )
-  io.println(
-    "║  Tri Dao et al., 2022 - FlashAttention                           ║",
-  )
-  io.println(
-    "╚══════════════════════════════════════════════════════════════════╝\n",
-  )
+  io.println("========================================================")
+  io.println("  FLASH ATTENTION - O(n) Memory Algorithm")
+  io.println("  Tri Dao et al., 2022")
+  io.println("  https://arxiv.org/abs/2205.14135")
+  io.println("========================================================")
+  io.println("")
 
-  io.println("PROBLEMA DA ATTENTION PADRÃO:")
-  io.println("  - Attention = softmax(Q @ K^T / sqrt(d)) @ V")
-  io.println("  - Q @ K^T cria matriz n×n")
-  io.println("  - Para seq_len=8192: 67M elementos = 256MB por cabeça!")
-  io.println("  - 32 cabeças = 8GB só para scores intermediários\n")
+  io.println("THE PROBLEM WITH STANDARD ATTENTION:")
+  io.println("  Attention(Q,K,V) = softmax(Q @ K^T / sqrt(d)) @ V")
+  io.println("  Q @ K^T creates an n x n matrix")
+  io.println("  For seq_len=8192: 67M elements = 256MB per head")
+  io.println("  With 32 heads: 8GB just for attention scores!")
+  io.println("")
 
-  io.println("SOLUÇÃO FLASH ATTENTION:")
-  io.println("  - Processa em TILES (blocos)")
-  io.println("  - Online softmax: atualiza estatísticas incrementalmente")
-  io.println("  - Nunca materializa matriz n×n completa")
-  io.println("  - Resultado: 2-4x mais rápido, O(n) memória!\n")
+  io.println("THE FLASH ATTENTION INSIGHT:")
+  io.println("  Memory bandwidth > FLOPs on modern GPUs")
+  io.println("  Process in TILES to stay in fast SRAM")
+  io.println("  Online softmax: compute exactly without full matrix")
+  io.println("  Result: 2-4x faster, O(n) memory, EXACT!")
+  io.println("")
 
-  // Benchmark com diferentes tamanhos
+  // Benchmark different sequence lengths
   let sizes = [64, 128, 256, 512]
   let head_dim = 64
 
-  io.println("━━━ BENCHMARK: Naive vs Flash Attention ━━━")
+  io.println("--- BENCHMARK: Naive vs Flash ---")
   io.println("  head_dim = " <> int.to_string(head_dim))
   io.println("")
 
@@ -357,11 +409,9 @@ pub fn benchmark_flash_attention() {
 
     let config = default_config(head_dim)
 
-    // Naive
     let #(naive_time, #(_naive_out, naive_mem)) =
       timer_tc(fn() { naive_attention(q, k, v, config.scale) })
 
-    // Flash
     let #(flash_time, flash_result) =
       timer_tc(fn() { flash_attention(q, k, v, config) })
 
@@ -388,15 +438,13 @@ pub fn benchmark_flash_attention() {
     io.println("")
   })
 
-  // Projeção para contextos longos
-  io.println("━━━ PROJEÇÃO: Economia de Memória por Contexto ━━━")
+  // Projections for long contexts
+  io.println("--- MEMORY SAVINGS AT SCALE ---")
   let long_contexts = [1024, 2048, 4096, 8192, 16_384, 32_768]
 
   list.each(long_contexts, fn(n) {
-    let naive_mem = n * n * 4
-    // n×n FP32
-    let flash_mem = 64 * 64 * 4
-    // block_q × block_kv FP32
+    let naive_mem = n * n * 4          // Full n x n matrix in FP32
+    let flash_mem = 64 * 64 * 4        // Just one tile
 
     let saved =
       100.0 *. { 1.0 -. int.to_float(flash_mem) /. int.to_float(naive_mem) }
@@ -414,41 +462,22 @@ pub fn benchmark_flash_attention() {
     )
   })
 
-  io.println(
-    "\n╔══════════════════════════════════════════════════════════════════╗",
-  )
-  io.println(
-    "║  POR QUE FLASH ATTENTION É REVOLUCIONÁRIO:                       ║",
-  )
-  io.println(
-    "║                                                                  ║",
-  )
-  io.println(
-    "║  1. Contextos longos viáveis (32K, 100K tokens)                  ║",
-  )
-  io.println(
-    "║  2. 2-4x speedup via IO-awareness                                ║",
-  )
-  io.println(
-    "║  3. Exatamente correto (não é aproximação!)                      ║",
-  )
-  io.println(
-    "║  4. Padrão em LLMs modernos (GPT-4, LLaMA, etc)                  ║",
-  )
-  io.println(
-    "║                                                                  ║",
-  )
-  io.println(
-    "║  viva_tensor + Flash = Contextos ilimitados na RTX 4090!         ║",
-  )
-  io.println(
-    "╚══════════════════════════════════════════════════════════════════╝",
-  )
+  io.println("")
+  io.println("========================================================")
+  io.println("  WHY FLASH ATTENTION CHANGED EVERYTHING:")
+  io.println("")
+  io.println("  1. Long contexts are now viable (32K, 100K, 1M tokens)")
+  io.println("  2. 2-4x speedup from IO-awareness")
+  io.println("  3. Exact computation (not an approximation!)")
+  io.println("  4. Now standard in GPT-4, Claude, LLaMA, Gemini...")
+  io.println("")
+  io.println("  viva_tensor + Flash = Unlimited context on RTX 4090!")
+  io.println("========================================================")
 }
 
-// ============================================================================
-// HELPERS
-// ============================================================================
+// -------------------------------------------------------------------------
+// Helper Functions
+// -------------------------------------------------------------------------
 
 fn dot_product(a: List(Float), b: List(Float)) -> Float {
   list.map2(a, b, fn(x, y) { x *. y })

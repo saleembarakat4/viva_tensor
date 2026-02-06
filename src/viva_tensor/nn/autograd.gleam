@@ -1,13 +1,32 @@
-//// Autograd - Automatic Differentiation Engine
+//// Autograd - Reverse-Mode Automatic Differentiation
 ////
-//// Implements reverse-mode automatic differentiation with an explicit tape.
-//// This enables computing gradients for neural network training.
+//// "The chain rule is the unsung hero of machine learning."
+////   — Every ML practitioner who debugged NaN gradients at 3am
+////
+//// Implements reverse-mode AD (Speelpenning, 1980) with an explicit tape.
+//// Why reverse-mode? Because we have few outputs (loss) and many inputs (params).
+//// Forward-mode would require O(n) passes; reverse needs just one. Math wins.
+////
+//// References:
+//// - Speelpenning, B. (1980). "Compiling Fast Partial Derivatives of Functions
+////   Given by Algorithms." PhD thesis, UIUC. The OG automatic differentiation.
+//// - Baydin et al. (2018). "Automatic Differentiation in Machine Learning: a Survey"
+////   https://arxiv.org/abs/1502.05767 - If you read one AD paper, make it this one.
+//// - Paszke et al. (2017). "Automatic differentiation in PyTorch" - Dynamic graphs done right.
+////
+//// Design choice: Explicit tape > implicit global graph. Fight me.
+//// PyTorch uses dynamic graphs because Chainer proved it works (Tokui et al., 2015).
+//// We take it further: the tape is a value you pass around. Pure FP, no spooky action.
+////
+//// The math that makes it all work:
+////   Chain rule: dL/dx = dL/dy * dy/dx
+////   In reverse-mode, we propagate dL/dy backward, accumulating dL/dx.
 ////
 //// ## Key Concepts
 ////
-//// - **Tape**: Records operations for backpropagation
-//// - **Variable**: A tensor tracked in the computational graph
-//// - **Traced(a)**: Result of a traced operation (value + new tape)
+//// - **Tape**: The computation graph. Records ops for the backward pass.
+//// - **Variable**: A tensor with an identity. It knows who it is in the graph.
+//// - **Traced(a)**: State monad in disguise. Carries the value AND updated tape.
 ////
 //// ## Example
 ////
@@ -15,20 +34,16 @@
 //// import viva_tensor/core/tensor
 //// import viva_tensor/nn/autograd.{Traced}
 ////
-//// // Create tape and variables
 //// let tape = autograd.new_tape()
 //// let Traced(x, tape1) = autograd.new_variable(tape, tensor.from_list([2.0]))
 //// let Traced(y, tape2) = autograd.new_variable(tape1, tensor.from_list([3.0]))
 ////
-//// // Perform traced operations
 //// let assert Ok(Traced(z, tape3)) = autograd.mul(tape2, x, y)
-////
-//// // Compute gradients via backpropagation
 //// let assert Ok(grads) = autograd.backward(tape3, z)
 ////
-//// // dz/dx = y = 3.0
+//// // dz/dx = y = 3.0  (partial derivative w.r.t. first input)
+//// // dz/dy = x = 2.0  (partial derivative w.r.t. second input)
 //// let assert Ok(dx) = dict.get(grads, x.id)
-//// // dz/dy = x = 2.0
 //// let assert Ok(dy) = dict.get(grads, y.id)
 //// ```
 
@@ -41,42 +56,62 @@ import viva_tensor/core/error.{type TensorError}
 import viva_tensor/core/ops
 import viva_tensor/core/tensor.{type Tensor}
 
-/// Unique identifier for each node in the computational graph
+// -------------------------------------------------------------------------
+// Core Types - The Building Blocks of Differentiation
+// -------------------------------------------------------------------------
+
+/// Unique identifier for each node in the computational graph.
+/// Sequential IDs give us implicit topological ordering for free.
+/// Sometimes the simplest solution is the best one.
 pub type NodeId =
   Int
 
-/// Function that calculates parent gradients based on this node's gradient
+/// The closure that computes gradients for parent nodes.
+/// Given dL/dself, returns [(parent_id, dL/dparent), ...].
+/// This is where the chain rule lives.
 pub type BackwardFn =
   fn(Tensor) -> List(#(NodeId, Tensor))
 
-/// The Tape maintains the history of operations in the computational graph.
-/// Unlike PyTorch (global/mutable), here the Tape is an explicit immutable value.
+/// The Tape: our explicit computation graph.
+///
+/// Unlike PyTorch's implicit global state, we pass this around explicitly.
+/// Functional programming purists rejoice. Debugging becomes tractable.
+/// Trade-off: slightly more verbose code, but no hidden state surprises.
 pub type Tape {
   Tape(
     next_id: NodeId,
-    // Maps resulting node ID -> Closure that computes gradients for parents
+    /// Maps node ID -> backward function that computes parent gradients.
+    /// Only non-leaf nodes have entries here.
     operations: Dict(NodeId, BackwardFn),
   )
 }
 
-/// A variable tracked in the autograd system
+/// A variable tracked in the autograd system.
+/// Think of it as a tensor that remembers its place in the computation graph.
 pub type Variable {
   Variable(id: NodeId, data: Tensor)
 }
 
-/// The result of a traced operation.
-/// Encapsulates the produced value (e.g., Variable) and the new tape state.
-/// Analogous to a State Monad.
+/// The result of a traced operation: value + updated tape.
+///
+/// This is secretly a State monad: State s a = s -> (a, s)
+/// We just make the state threading explicit. Gleam doesn't have do-notation,
+/// so explicit is actually clearer here.
 pub type Traced(a) {
   Traced(value: a, tape: Tape)
 }
 
-/// Creates a new empty tape
+// -------------------------------------------------------------------------
+// Tape Management - Where Gradients Begin Their Journey
+// -------------------------------------------------------------------------
+
+/// Creates a fresh tape. The beginning of every gradient computation.
 pub fn new_tape() -> Tape {
   Tape(next_id: 0, operations: dict.new())
 }
 
-/// Registers a new variable (leaf node) in the graph
+/// Registers a new variable (leaf node) in the graph.
+/// Leaf nodes have no backward function - they're where gradients accumulate.
 pub fn new_variable(tape: Tape, data: Tensor) -> Traced(Variable) {
   let id = tape.next_id
   let var = Variable(id: id, data: data)
@@ -84,12 +119,22 @@ pub fn new_variable(tape: Tape, data: Tensor) -> Traced(Variable) {
   Traced(value: var, tape: new_tape)
 }
 
-// =============================================================================
-// TRACED OPERATIONS
-// =============================================================================
+// -------------------------------------------------------------------------
+// Traced Operations - Forward Pass with Gradient Recording
+// -------------------------------------------------------------------------
+//
+// Each operation does two things:
+// 1. Compute the forward result (the easy part)
+// 2. Register a backward function (the chain rule part)
+//
+// The backward function captures the inputs in a closure.
+// When we call backward(), these closures unwind the computation.
 
-/// Operation sequencing (Monadic Pipe)
-/// Allows chaining layers: x |> sequence(layer1) |> sequence(layer2)
+/// Operation sequencing (monadic bind, essentially).
+/// Allows chaining: x |> sequence(layer1) |> sequence(layer2)
+///
+/// This is >>= from Haskell, but we call it sequence because
+/// Gleam users shouldn't need a category theory PhD to read the code.
 pub fn sequence(
   input: Result(Traced(Variable), e),
   layer_fn: fn(Tape, Variable) -> Result(Traced(Variable), e),
@@ -98,7 +143,11 @@ pub fn sequence(
   layer_fn(tape, var)
 }
 
-/// Traced addition: c = a + b (supports broadcasting)
+/// Traced addition: c = a + b
+///
+/// Gradient: dc/da = 1, dc/db = 1
+/// With broadcasting, we sum over expanded dimensions.
+/// This is trickier than it looks - broadcasting gradients must reduce back.
 pub fn add(
   tape: Tape,
   a: Variable,
@@ -110,23 +159,19 @@ pub fn add(
   let a_shape = tensor.shape(a.data)
   let b_shape = tensor.shape(b.data)
 
-  // Backward: y = a + b
-  // If broadcasting occurred, we need to sum gradients over expanded dimensions
+  // Backward: y = a + b => dy/da = 1, dy/db = 1
+  // But if we broadcast, grad_a might be larger than a.
+  // We need to sum over the broadcast dimensions to match shapes.
   let backward = fn(grad: Tensor) {
     let grad_shape = tensor.shape(grad)
     let grad_a = case grad_shape == a_shape {
       True -> grad
-      False -> {
-        // Simplified: sum over first axis for broadcast reduction
-        sum_to_shape(grad, a_shape)
-      }
+      False -> sum_to_shape(grad, a_shape)
     }
 
     let grad_b = case grad_shape == b_shape {
       True -> grad
-      False -> {
-        sum_to_shape(grad, b_shape)
-      }
+      False -> sum_to_shape(grad, b_shape)
     }
 
     [#(a.id, grad_a), #(b.id, grad_b)]
@@ -139,6 +184,9 @@ pub fn add(
 }
 
 /// Traced subtraction: c = a - b
+///
+/// Gradient: dc/da = 1, dc/db = -1
+/// Subtraction is just addition with a sign flip. Simple, elegant.
 pub fn sub(
   tape: Tape,
   a: Variable,
@@ -148,9 +196,7 @@ pub fn sub(
 
   let res_id = tape.next_id
 
-  // Backward: y = a - b
-  // dy/da = 1 * grad
-  // dy/db = -1 * grad
+  // Backward: y = a - b => dy/da = 1*grad, dy/db = -1*grad
   let backward = fn(grad: Tensor) {
     let neg_grad = ops.negate(grad)
     [#(a.id, grad), #(b.id, neg_grad)]
@@ -162,7 +208,10 @@ pub fn sub(
   Ok(Traced(value: Variable(id: res_id, data: res_data), tape: new_tape))
 }
 
-/// Traced Element-wise Multiplication: c = a * b
+/// Traced element-wise multiplication: c = a * b (Hadamard product)
+///
+/// Gradient: dc/da = b, dc/db = a
+/// The classic product rule: d(uv) = u*dv + v*du
 pub fn mul(
   tape: Tape,
   a: Variable,
@@ -172,9 +221,8 @@ pub fn mul(
 
   let res_id = tape.next_id
 
-  // Backward: y = a * b
-  // dy/da = b * grad
-  // dy/db = a * grad
+  // Backward: y = a * b => dy/da = b * grad, dy/db = a * grad
+  // Product rule, meet chain rule. They get along well.
   let backward = fn(grad: Tensor) {
     let assert Ok(grad_a) = ops.mul(grad, b.data)
     let assert Ok(grad_b) = ops.mul(grad, a.data)
@@ -187,8 +235,11 @@ pub fn mul(
   Ok(Traced(value: Variable(id: res_id, data: res_data), tape: new_tape))
 }
 
-/// Traced Mean (Reduce Mean): y = mean(x)
-/// Returns a scalar Tensor (rank 0 or 1 depending on base implementation, here we force 1)
+/// Traced mean reduction: y = mean(x)
+///
+/// Gradient: dy/dx_i = 1/n for all i
+/// The gradient "fans out" uniformly to all inputs.
+/// This is why mean loss converges more stably than sum loss.
 pub fn mean(tape: Tape, a: Variable) -> Traced(Variable) {
   let val = ops.mean(a.data)
   let res_data = tensor.from_list([val])
@@ -196,16 +247,13 @@ pub fn mean(tape: Tape, a: Variable) -> Traced(Variable) {
   let res_id = tape.next_id
   let a_shape = tensor.shape(a.data)
 
-  // Backward: y = sum(x) / n
-  // dy/dx = (1/n) * grad
-  // The input gradient (grad) is a scalar (or 1-element tensor)
-  // We need to expand it to x's shape and divide by n
+  // Backward: y = sum(x) / n => dy/dx = (1/n) * grad
+  // grad is scalar, we expand it to input shape divided by n
   let backward = fn(grad: Tensor) {
     let n = tensor.size(a.data) |> int.to_float
     let grad_val = tensor.to_list(grad) |> list.first |> result.unwrap(1.0)
     let scaled_grad_val = grad_val /. n
 
-    // Creates a filled tensor with the scaled gradient value
     let grad_input = tensor.fill(a_shape, scaled_grad_val)
     [#(a.id, grad_input)]
   }
@@ -216,7 +264,14 @@ pub fn mean(tape: Tape, a: Variable) -> Traced(Variable) {
   Traced(value: Variable(id: res_id, data: res_data), tape: new_tape)
 }
 
-/// Traced Matrix Multiplication: c = a @ b
+/// Traced matrix multiplication: C = A @ B
+///
+/// Gradients (the beautiful part):
+///   dL/dA = dL/dC @ B^T
+///   dL/dB = A^T @ dL/dC
+///
+/// This is why linear algebra and calculus are best friends.
+/// The transpose "reverses" the dimension matching from the forward pass.
 pub fn matmul(
   tape: Tape,
   a: Variable,
@@ -226,9 +281,9 @@ pub fn matmul(
 
   let res_id = tape.next_id
 
-  // Backward: y = a @ b
-  // dy/da = grad @ b.T
-  // dy/db = a.T @ grad
+  // Backward: y = A @ B
+  // dy/dA = grad @ B^T  (dims: [m,n] @ [n,k]^T = [m,k] @ [k,n] = [m,n])
+  // dy/dB = A^T @ grad  (dims: [m,k]^T @ [m,n] = [k,m] @ [m,n] = [k,n])
   let backward = fn(grad: Tensor) {
     let assert Ok(bt) = ops.transpose(b.data)
     let assert Ok(at) = ops.transpose(a.data)
@@ -245,7 +300,10 @@ pub fn matmul(
   Ok(Traced(value: Variable(id: res_id, data: res_data), tape: new_tape))
 }
 
-/// Traced Transpose: c = a.T
+/// Traced transpose: B = A^T
+///
+/// Gradient: dL/dA = (dL/dB)^T
+/// Transpose is its own inverse. Elegant symmetry.
 pub fn transpose(
   tape: Tape,
   a: Variable,
@@ -254,7 +312,8 @@ pub fn transpose(
 
   let res_id = tape.next_id
 
-  // Backward: y = a.T => dy/da = grad.T
+  // Backward: y = A^T => dy/dA = grad^T
+  // The Jacobian of transpose is... transpose. Beautiful.
   let backward = fn(grad: Tensor) {
     let assert Ok(grad_t) = ops.transpose(grad)
     [#(a.id, grad_t)]
@@ -266,7 +325,13 @@ pub fn transpose(
   Ok(Traced(value: Variable(id: res_id, data: res_data), tape: new_tape))
 }
 
-/// Traced ReLU
+/// Traced ReLU activation: y = max(0, x)
+///
+/// Gradient: dy/dx = 1 if x > 0, else 0
+///
+/// The "dying ReLU" problem lives here: once a neuron outputs 0,
+/// its gradient is 0, so it never learns again. RIP that neuron.
+/// Leaky ReLU fixes this, but plain ReLU is still surprisingly effective.
 pub fn relu(tape: Tape, a: Variable) -> Traced(Variable) {
   let res_data =
     ops.map(a.data, fn(x) {
@@ -278,7 +343,8 @@ pub fn relu(tape: Tape, a: Variable) -> Traced(Variable) {
 
   let res_id = tape.next_id
 
-  // Backward: y = relu(a) => dy/da = 1 if a > 0 else 0
+  // Backward: y = relu(x) => dy/dx = indicator(x > 0)
+  // This is a subgradient at x=0, but who's counting?
   let backward = fn(grad: Tensor) {
     let mask =
       ops.map(a.data, fn(x) {
@@ -297,44 +363,56 @@ pub fn relu(tape: Tape, a: Variable) -> Traced(Variable) {
   Traced(value: Variable(id: res_id, data: res_data), tape: new_tape)
 }
 
-// =============================================================================
-// BACKPROPAGATION ENGINE
-// =============================================================================
+// -------------------------------------------------------------------------
+// Backpropagation Engine - Where Gradients Flow Uphill
+// -------------------------------------------------------------------------
+//
+// "Backprop is just the chain rule applied recursively."
+//   — Everyone who's ever explained backprop
+//
+// We traverse the graph in reverse topological order (newest to oldest).
+// For each node, we compute dL/d(node) and propagate to its parents.
+// Gradients accumulate when a node has multiple children (sum rule).
 
-/// Executes backpropagation starting from a scalar variable (loss).
-/// Returns a Map of NodeId -> Gradient (Tensor)
+/// Executes backpropagation starting from a loss variable.
+/// Returns gradients for all variables: Map(NodeId -> Tensor).
+///
+/// The loss should be a scalar (or we treat it as sum of elements).
+/// Multi-output differentiation is possible but rarely needed in ML.
 pub fn backward(
   tape: Tape,
   loss: Variable,
 ) -> Result(Dict(NodeId, Tensor), String) {
-  // Initial gradient dLoss/dLoss = 1.0
+  // Seed gradient: dL/dL = 1.0 (the journey begins)
   let loss_shape = tensor.shape(loss.data)
   let initial_grad = tensor.ones(loss_shape)
   let initial_grads = dict.from_list([#(loss.id, initial_grad)])
 
-  // Process nodes in reverse creation order (Implicit Topological Sort)
-  // IDs are sequential, so (next_id - 1) down to 0 ensures correct order.
+  // Process nodes in reverse creation order.
+  // Since IDs are sequential, this IS topological order.
+  // No need for Kahn's algorithm or DFS - the tape gives it to us free.
   let all_ids = list.range(tape.next_id - 1, 0)
 
   let final_grads =
     list.fold(all_ids, initial_grads, fn(grads, current_id) {
       case dict.get(grads, current_id) {
+        // Node doesn't contribute to loss (not on any path to loss)
         Error(_) -> grads
-        // Node does not contribute to loss or hasn't been computed
         Ok(current_grad) -> {
-          // If this node has an operation registered on the tape, expand gradient
           case dict.get(tape.operations, current_id) {
+            // Leaf node: no parents, gradient just accumulates here
             Error(_) -> grads
-            // Leaf node (input), no parents to propagate to
+            // Interior node: propagate gradient to parents via chain rule
             Ok(back_fn) -> {
               let parent_grads = back_fn(current_grad)
 
-              // Accumulate gradients in parents (sum if gradient already exists)
+              // Accumulate gradients (multivariate chain rule: sum contributions)
               list.fold(parent_grads, grads, fn(acc_grads, pair) {
                 let #(pid, pgrad) = pair
                 case dict.get(acc_grads, pid) {
                   Error(_) -> dict.insert(acc_grads, pid, pgrad)
                   Ok(existing) -> {
+                    // Shape mismatch here means we have a bug in backward functions
                     let existing_shape = tensor.shape(existing)
                     let pgrad_shape = tensor.shape(pgrad)
                     case existing_shape == pgrad_shape {
@@ -344,12 +422,13 @@ pub fn backward(
                       }
                       False -> {
                         let msg =
-                          "ShapeMismatch at node "
+                          "Gradient shape mismatch at node "
                           <> int.to_string(pid)
                           <> ": existing="
                           <> string_shape(existing_shape)
-                          <> ", new="
+                          <> ", incoming="
                           <> string_shape(pgrad_shape)
+                          <> ". This is a bug in the backward function."
                         panic as msg
                       }
                     }
@@ -365,15 +444,19 @@ pub fn backward(
   Ok(final_grads)
 }
 
-// =============================================================================
-// INTERNAL HELPERS
-// =============================================================================
+// -------------------------------------------------------------------------
+// Internal Helpers - The Unglamorous but Necessary Parts
+// -------------------------------------------------------------------------
 
 fn string_shape(shape: List(Int)) -> String {
   "[" <> string.join(list.map(shape, int.to_string), with: ", ") <> "]"
 }
 
-/// Sum tensor to match target shape (for broadcast gradient reduction)
+/// Sum tensor to match target shape (for broadcast gradient reduction).
+///
+/// When we broadcast [3] to [2,3] in the forward pass,
+/// we must sum [2,3] gradients back to [3] in backward.
+/// This is the "reverse of broadcasting."
 fn sum_to_shape(t: Tensor, target_shape: List(Int)) -> Tensor {
   let _data = tensor.to_list(t)
   let t_shape = tensor.shape(t)
@@ -381,7 +464,8 @@ fn sum_to_shape(t: Tensor, target_shape: List(Int)) -> Tensor {
   case t_shape == target_shape {
     True -> t
     False -> {
-      // Simple reduction: sum all elements and fill target shape
+      // Simplified reduction: sum all and distribute evenly.
+      // TODO: Proper axis-aware reduction for non-trivial broadcasts.
       let total = ops.sum(t)
       let target_size = list.fold(target_shape, 1, fn(acc, d) { acc * d })
       let avg = total /. int.to_float(target_size)
