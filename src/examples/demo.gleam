@@ -1,6 +1,6 @@
-//// viva_tensor Demo - Demonstração completa da biblioteca
+//// viva_tensor Demo - Complete library demonstration
 ////
-//// Roda com: gleam run -m viva_tensor/demo
+//// Run with: gleam run -m viva_tensor/demo
 
 import gleam/float
 import gleam/int
@@ -28,17 +28,17 @@ pub fn main() {
     "║          viva_tensor - Pure Gleam Tensor Library              ║",
   )
   io.println(
-    "║                       DEMO COMPLETA                           ║",
+    "║                       FULL DEMO                               ║",
   )
   io.println(
     "╚═══════════════════════════════════════════════════════════════╝",
   )
   io.println("")
 
-  // 1. Operações básicas
+  // 1. Basic operations
   demo_basic_ops()
 
-  // 2. Quantização INT8
+  // 2. INT8 Quantization
   demo_int8_quantization()
 
   // 3. NF4 (QLoRA style)
@@ -53,25 +53,25 @@ pub fn main() {
   // 6. 2:4 Sparsity
   demo_sparsity()
 
-  // 7. Combinando técnicas
+  // 7. Combining techniques
   demo_combined()
 
   io.println("")
   io.println("═══════════════════════════════════════════════════════════════")
-  io.println("                    DEMO CONCLUÍDA!")
+  io.println("                    DEMO COMPLETE!")
   io.println("═══════════════════════════════════════════════════════════════")
 }
 
 // ============================================================================
-// 1. OPERAÇÕES BÁSICAS
+// 1. BASIC OPERATIONS
 // ============================================================================
 
 fn demo_basic_ops() {
   io.println("┌─────────────────────────────────────────────────────────────┐")
-  io.println("│ 1. OPERAÇÕES BÁSICAS DE TENSORS                            │")
+  io.println("│ 1. BASIC TENSOR OPERATIONS                                 │")
   io.println("└─────────────────────────────────────────────────────────────┘")
 
-  // Criar tensors
+  // Create tensors
   let a = tensor.zeros([2, 3])
   let b = tensor.ones([2, 3])
   let c = tensor.random_uniform([2, 3])
@@ -80,7 +80,7 @@ fn demo_basic_ops() {
   io.println("  ones([2,3]):  " <> tensor_preview(b))
   io.println("  random([2,3]): " <> tensor_preview(c))
 
-  // Operações
+  // Operations
   let sum_result = tensor.add(a, b)
   io.println("  zeros + ones: " <> result_tensor_preview(sum_result))
 
@@ -114,7 +114,7 @@ fn demo_int8_quantization() {
   io.println("│ 2. INT8 QUANTIZATION (4x compression)                      │")
   io.println("└─────────────────────────────────────────────────────────────┘")
 
-  // Criar tensor de pesos simulando uma layer de rede neural
+  // Create weight tensor simulating a neural network layer
   let weights = tensor.random_normal([256, 256], 0.0, 0.5)
   let original_size = 256 * 256 * 4
   // FP32 = 4 bytes
@@ -126,20 +126,20 @@ fn demo_int8_quantization() {
     <> format_bytes(original_size),
   )
 
-  // Quantizar
+  // Quantize
   let quantized = compression.quantize_int8(weights)
   io.println(
-    "  Quantizado: " <> int.to_string(quantized.memory_bytes) <> " bytes",
+    "  Quantized: " <> int.to_string(quantized.memory_bytes) <> " bytes",
   )
 
   let compression_ratio =
     int.to_float(original_size) /. int.to_float(quantized.memory_bytes)
-  io.println("  Compressão: " <> float_to_str(compression_ratio) <> "x")
+  io.println("  Compression: " <> float_to_str(compression_ratio) <> "x")
 
-  // Dequantizar e medir erro
+  // Dequantize and measure error
   let recovered = compression.dequantize(quantized)
   let error = compute_error(weights, recovered)
-  io.println("  Erro médio: " <> float_to_str(error *. 100.0) <> "%")
+  io.println("  Mean error: " <> float_to_str(error *. 100.0) <> "%")
 
   io.println("")
 }
@@ -158,27 +158,27 @@ fn demo_nf4_quantization() {
 
   io.println("  Original: " <> format_bytes(original_size))
 
-  // NF4 quantização
+  // NF4 quantization
   let config = nf4.default_config()
   let quantized = nf4.quantize(weights, config)
 
   io.println(
-    "  NF4 quantizado: " <> int.to_string(quantized.memory_bytes) <> " bytes",
+    "  NF4 quantized: " <> int.to_string(quantized.memory_bytes) <> " bytes",
   )
   io.println(
-    "  Compressão: " <> float_to_str(quantized.compression_ratio) <> "x",
+    "  Compression: " <> float_to_str(quantized.compression_ratio) <> "x",
   )
 
-  // Dequantizar
+  // Dequantize
   let recovered = nf4.dequantize(quantized)
   let error = compute_error(weights, recovered)
-  io.println("  Erro médio: " <> float_to_str(error *. 100.0) <> "%")
+  io.println("  Mean error: " <> float_to_str(error *. 100.0) <> "%")
 
   // Double quantization
   let dq_quantized = nf4.double_quantize(weights, config)
   let dq_ratio =
     int.to_float(original_size) /. int.to_float(dq_quantized.memory_bytes)
-  io.println("  NF4+DQ: " <> float_to_str(dq_ratio) <> "x compressão")
+  io.println("  NF4+DQ: " <> float_to_str(dq_ratio) <> "x compression")
 
   io.println("")
 }
@@ -192,10 +192,10 @@ fn demo_awq_quantization() {
   io.println("│ 4. AWQ - Activation-aware (MLSys 2024 Best Paper)          │")
   io.println("└─────────────────────────────────────────────────────────────┘")
 
-  // Weights como Tensor - 256x256 matrix
+  // Weights as Tensor - 256x256 matrix
   let weights = tensor.random_normal([256, 256], 0.0, 0.3)
 
-  // Calibration data como List(List(Float)) - 64 samples, 256 features
+  // Calibration data as List(List(Float)) - 64 samples, 256 features
   let activations_tensor = tensor.random_uniform([64, 256])
   let calibration_data = tensor_to_matrix(activations_tensor, 256)
 
@@ -204,22 +204,22 @@ fn demo_awq_quantization() {
   io.println("  Weights: [256, 256] = " <> format_bytes(original_size))
   io.println("  Calibration: [64, 256] (activations batch)")
 
-  // AWQ quantização
+  // AWQ quantization
   let config = awq.default_config()
   let quantized = awq.quantize_awq(weights, calibration_data, config)
 
   io.println(
-    "  AWQ quantizado: " <> int.to_string(quantized.memory_bytes) <> " bytes",
+    "  AWQ quantized: " <> int.to_string(quantized.memory_bytes) <> " bytes",
   )
 
   let compression_ratio =
     int.to_float(original_size) /. int.to_float(quantized.memory_bytes)
-  io.println("  Compressão: " <> float_to_str(compression_ratio) <> "x")
+  io.println("  Compression: " <> float_to_str(compression_ratio) <> "x")
 
-  // Dequantizar
+  // Dequantize
   let recovered = awq.dequantize_awq(quantized)
   let error = compute_error(weights, recovered)
-  io.println("  Erro médio: " <> float_to_str(error *. 100.0) <> "%")
+  io.println("  Mean error: " <> float_to_str(error *. 100.0) <> "%")
 
   io.println("")
 }
@@ -233,7 +233,7 @@ fn demo_flash_attention() {
   io.println("│ 5. FLASH ATTENTION - O(n) Memory                           │")
   io.println("└─────────────────────────────────────────────────────────────┘")
 
-  // Simular Q, K, V para attention
+  // Simulate Q, K, V for attention
   let seq_len = 128
   let head_dim = 64
 
@@ -259,7 +259,7 @@ fn demo_flash_attention() {
     "  Memory saved: " <> float_to_str(flash_result.memory_saved_percent) <> "%",
   )
 
-  // Verificar que outputs são similares
+  // Verify that outputs are similar
   let diff = compute_error(naive_output, flash_result.output)
   io.println("  Output difference: " <> float_to_str(diff *. 100.0) <> "%")
 
@@ -275,13 +275,13 @@ fn demo_sparsity() {
   io.println("│ 6. 2:4 STRUCTURED SPARSITY - Tensor Cores                  │")
   io.println("└─────────────────────────────────────────────────────────────┘")
 
-  // Criar tensor para sparsity
+  // Create tensor for sparsity
   let weights = tensor.random_normal([256, 256], 0.0, 0.5)
   let original_size = 256 * 256 * 4
 
   io.println("  Original: [256, 256] = " <> format_bytes(original_size))
 
-  // Aplicar 2:4 sparsity
+  // Apply 2:4 sparsity
   let sparse = sparsity.prune_24_magnitude(weights)
 
   io.println("  Sparse memory: " <> format_bytes(sparse.memory_bytes))
@@ -291,7 +291,7 @@ fn demo_sparsity() {
     int.to_float(original_size) /. int.to_float(sparse.memory_bytes)
   io.println("  Compression: " <> float_to_str(compression_ratio) <> "x")
 
-  // Decompress e medir erro
+  // Decompress and measure error
   let recovered = sparsity.decompress(sparse)
   let error = compute_error(weights, recovered)
   io.println("  Approximation error: " <> float_to_str(error))
@@ -305,7 +305,7 @@ fn demo_sparsity() {
 }
 
 // ============================================================================
-// 7. COMBINANDO TÉCNICAS
+// 7. COMBINING TECHNIQUES
 // ============================================================================
 
 fn demo_combined() {
@@ -313,7 +313,7 @@ fn demo_combined() {
   io.println("│ 7. MEMORY MULTIPLICATION - Combining Techniques            │")
   io.println("└─────────────────────────────────────────────────────────────┘")
 
-  // Simular um LLM de 7B params
+  // Simulate a 7B param LLM
   let params = 7_000_000_000
   let fp16_size = params * 2
   // 14GB

@@ -1,4 +1,4 @@
-//// Benchmark Comparativo: viva_tensor (Pure Gleam) vs viva_glands (Rust/Candle GPU)
+//// Comparative Benchmark: viva_tensor (Pure Gleam) vs viva_glands (Rust/Candle GPU)
 ////
 //// Run: gleam run -m viva_tensor/bench_gpu
 
@@ -27,11 +27,11 @@ pub fn main() {
 
   case glands_available {
     True -> {
-      io.println("✅ viva_glands (Rust/Candle) disponível!\n")
+      io.println("✅ viva_glands (Rust/Candle) available!\n")
       run_comparative_benchmarks()
     }
     False -> {
-      io.println("⚠️  viva_glands não disponível - rodando só Pure Gleam\n")
+      io.println("⚠️  viva_glands not available - running Pure Gleam only\n")
       run_gleam_only_benchmarks()
     }
   }
@@ -212,15 +212,15 @@ fn run_gleam_only_benchmarks() {
 
 fn bench_similarity_comparative() {
   // This would compare if glands is available
-  io.println("(Comparativo requer viva_glands carregado)")
+  io.println("(Comparison requires viva_glands to be loaded)")
 }
 
 fn bench_dot_comparative() {
-  io.println("(Comparativo requer viva_glands carregado)")
+  io.println("(Comparison requires viva_glands to be loaded)")
 }
 
 fn bench_matmul_comparative() {
-  io.println("(Comparativo requer viva_glands carregado)")
+  io.println("(Comparison requires viva_glands to be loaded)")
 }
 
 fn float_to_string(f: Float) -> String {

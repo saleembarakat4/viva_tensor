@@ -1,7 +1,7 @@
-//// Benchmark de Concorrência - Onde Gleam BRILHA!
+//// Concurrency Benchmark - Where Gleam SHINES!
 ////
-//// O poder do BEAM: milhões de processos leves
-//// C/C++ libs são rápidas em single-thread, mas Gleam escala!
+//// The power of BEAM: millions of lightweight processes
+//// C/C++ libs are fast in single-thread, but Gleam scales!
 ////
 //// Run: gleam run -m viva_tensor/bench_concurrent
 
@@ -16,27 +16,27 @@ pub fn main() {
     "╔══════════════════════════════════════════════════════════════════╗",
   )
   io.println(
-    "║  CONCURRENCY BENCHMARK - Onde BEAM/Gleam BRILHA vs C/C++        ║",
+    "║  CONCURRENCY BENCHMARK - Where BEAM/Gleam SHINES vs C/C++      ║",
   )
   io.println(
     "╚══════════════════════════════════════════════════════════════════╝\n",
   )
 
   io.println(
-    "C/C++ libs (Eigen, OpenBLAS, MKL) são rápidas em single-thread...",
+    "C/C++ libs (Eigen, OpenBLAS, MKL) are fast in single-thread...",
   )
-  io.println("Mas quantos tensors você processa em PARALELO? 🤔\n")
+  io.println("But how many tensors can you process in PARALLEL? 🤔\n")
 
   // Test 1: Parallel tensor creation
-  io.println("━━━ TEST 1: Criação Paralela de Tensors ━━━")
+  io.println("━━━ TEST 1: Parallel Tensor Creation ━━━")
   bench_parallel_creation()
 
   // Test 2: Parallel reductions
-  io.println("\n━━━ TEST 2: Reduções Paralelas ━━━")
+  io.println("\n━━━ TEST 2: Parallel Reductions ━━━")
   bench_parallel_reductions()
 
   // Test 3: Parallel dot products (like embedding similarity search)
-  io.println("\n━━━ TEST 3: Similaridade em Batch (Embedding Search) ━━━")
+  io.println("\n━━━ TEST 3: Batch Similarity (Embedding Search) ━━━")
   bench_parallel_similarity()
 
   // Test 4: Spawn many processes
@@ -47,10 +47,10 @@ pub fn main() {
     "\n╔══════════════════════════════════════════════════════════════════╗",
   )
   io.println(
-    "║  CONCLUSÃO: BEAM escala horizontalmente, C/C++ escala vertical  ║",
+    "║  CONCLUSION: BEAM scales horizontally, C/C++ scales vertically  ║",
   )
   io.println(
-    "║  Para ML inference em produção: Gleam + Rust NIF = 🔥           ║",
+    "║  For ML inference in production: Gleam + Rust NIF = 🔥           ║",
   )
   io.println(
     "╚══════════════════════════════════════════════════════════════════╝",
@@ -131,7 +131,7 @@ fn bench_parallel_reductions() {
   }
 
   io.println(
-    "  1000 tensors x 1000 elementos: seq="
+    "  1000 tensors x 1000 elements: seq="
     <> int.to_string(seq_time / 1000)
     <> "ms, par="
     <> int.to_string(par_time / 1000)
@@ -142,7 +142,7 @@ fn bench_parallel_reductions() {
 }
 
 fn bench_parallel_similarity() {
-  // Simula busca de embedding: 1 query vs N documentos
+  // Simulates embedding search: 1 query vs N documents
   let query = tensor.random_uniform([512])
   let documents =
     list.range(1, 10_000)
@@ -194,7 +194,7 @@ fn bench_parallel_similarity() {
 }
 
 fn bench_process_spawning() {
-  io.println("  Quantos processos BEAM conseguimos spawnar?")
+  io.println("  How many BEAM processes can we spawn?")
 
   let counts = [1000, 10_000, 100_000]
 
@@ -215,7 +215,7 @@ fn bench_process_spawning() {
     io.println(
       "    "
       <> format_number(n)
-      <> " processos: "
+      <> " processes: "
       <> int.to_string(time / 1000)
       <> "ms ("
       <> float_to_string(spawns_per_sec)
@@ -225,10 +225,10 @@ fn bench_process_spawning() {
 
   io.println("")
   io.println(
-    "  💡 Em C/C++ você precisaria de pthreads, mutex, condition vars...",
+    "  💡 In C/C++ you would need pthreads, mutex, condition vars...",
   )
   io.println(
-    "  💡 Em Gleam: erlang_spawn() e pronto! Zero data races garantido.",
+    "  💡 In Gleam: erlang_spawn() and done! Zero data races guaranteed.",
   )
 }
 

@@ -1,7 +1,7 @@
-//// Benchmark Completo com Métricas Avançadas
+//// Full Benchmark with Advanced Metrics
 ////
-//// Compara SQNR real vs teórico para INT8, NF4, AWQ
-//// Baseado em papers 2024-2026: NVFP4, TWEO, FALQON
+//// Compares real vs theoretical SQNR for INT8, NF4, AWQ
+//// Based on papers 2024-2026: NVFP4, TWEO, FALQON
 
 import gleam/float
 import gleam/int
@@ -29,24 +29,24 @@ pub fn run_full_benchmark() {
     "╔═══════════════════════════════════════════════════════════════════════════╗",
   )
   io.println(
-    "║          viva_tensor - BENCHMARK COMPLETO COM MÉTRICAS AVANÇADAS          ║",
+    "║          viva_tensor - FULL BENCHMARK WITH ADVANCED METRICS              ║",
   )
   io.println(
-    "║                   SQNR Real vs Teórico | Papers 2024-2026                 ║",
+    "║                   Real vs Theoretical SQNR | Papers 2024-2026            ║",
   )
   io.println(
     "╚═══════════════════════════════════════════════════════════════════════════╝",
   )
   io.println("")
 
-  // Criar tensor de teste - simula pesos de rede neural (distribuição normal)
+  // Create test tensor - simulates neural network weights (normal distribution)
   let test_tensor = tensor.random_normal([512, 512], 0.0, 0.3)
   let original_bytes = 512 * 512 * 4
   // FP32
 
-  io.println("━━━ CONFIGURAÇÃO DO TESTE ━━━")
-  io.println("  Tensor: [512, 512] = 262,144 elementos")
-  io.println("  Distribuição: Normal(0, 0.3) - típico de pesos NN")
+  io.println("━━━ TEST CONFIGURATION ━━━")
+  io.println("  Tensor: [512, 512] = 262,144 elements")
+  io.println("  Distribution: Normal(0, 0.3) - typical of NN weights")
   io.println(
     "  Original: " <> int.to_string(original_bytes / 1024) <> " KB (FP32)",
   )
@@ -61,14 +61,14 @@ pub fn run_full_benchmark() {
   // Benchmark AWQ
   benchmark_awq_full(test_tensor, original_bytes)
 
-  // Tabela comparativa final
+  // Final comparison table
   print_comparison_table(test_tensor, original_bytes)
 
   io.println("")
   io.println(
     "═══════════════════════════════════════════════════════════════════════════",
   )
-  io.println("                        BENCHMARK CONCLUÍDO!")
+  io.println("                        BENCHMARK COMPLETE!")
   io.println(
     "═══════════════════════════════════════════════════════════════════════════",
   )
@@ -92,15 +92,15 @@ fn benchmark_int8(original: Tensor, original_bytes: Int) {
   let quantized = compression.quantize_int8(original)
   let recovered = compression.dequantize(quantized)
 
-  // Métricas completas
+  // Full metrics
   let quant_metrics = metrics.compute_all(original, recovered)
 
-  // SQNR teórico para 8 bits
+  // Theoretical SQNR for 8 bits
   let theoretical_sqnr = metrics.theoretical_sqnr(8)
 
   io.println("")
   io.println("  ┌─────────────────────────────────────────────┐")
-  io.println("  │ MÉTRICAS DE QUALIDADE                       │")
+  io.println("  │ QUALITY METRICS                              │")
   io.println("  ├─────────────────────────────────────────────┤")
   io.println(
     "  │ MSE:              " <> pad_float(quant_metrics.mse) <> "          │",
@@ -131,7 +131,7 @@ fn benchmark_int8(original: Tensor, original_bytes: Int) {
     "  │ SNR (Real):       " <> pad_float(quant_metrics.snr_db) <> " dB       │",
   )
   io.println(
-    "  │ SQNR (Teórico):   " <> pad_float(theoretical_sqnr) <> " dB       │",
+    "  │ SQNR (Theoret.):  " <> pad_float(theoretical_sqnr) <> " dB       │",
   )
   io.println(
     "  │ Gap:              "
@@ -143,9 +143,9 @@ fn benchmark_int8(original: Tensor, original_bytes: Int) {
   let ratio =
     int.to_float(original_bytes) /. int.to_float(quantized.memory_bytes)
   io.println("")
-  io.println("  Compressão: " <> float_to_str(ratio) <> "x")
+  io.println("  Compression: " <> float_to_str(ratio) <> "x")
   io.println(
-    "  Memória: " <> int.to_string(quantized.memory_bytes / 1024) <> " KB",
+    "  Memory: " <> int.to_string(quantized.memory_bytes / 1024) <> " KB",
   )
   io.println("")
 }
@@ -169,15 +169,15 @@ fn benchmark_nf4_full(original: Tensor, original_bytes: Int) {
   let quantized = nf4.quantize(original, config)
   let recovered = nf4.dequantize(quantized)
 
-  // Métricas completas
+  // Full metrics
   let quant_metrics = metrics.compute_all(original, recovered)
 
-  // SQNR teórico para 4 bits
+  // Theoretical SQNR for 4 bits
   let theoretical_sqnr = metrics.theoretical_sqnr(4)
 
   io.println("")
   io.println("  ┌─────────────────────────────────────────────┐")
-  io.println("  │ MÉTRICAS DE QUALIDADE                       │")
+  io.println("  │ QUALITY METRICS                              │")
   io.println("  ├─────────────────────────────────────────────┤")
   io.println(
     "  │ MSE:              " <> pad_float(quant_metrics.mse) <> "          │",
@@ -208,7 +208,7 @@ fn benchmark_nf4_full(original: Tensor, original_bytes: Int) {
     "  │ SNR (Real):       " <> pad_float(quant_metrics.snr_db) <> " dB       │",
   )
   io.println(
-    "  │ SQNR (Teórico):   " <> pad_float(theoretical_sqnr) <> " dB       │",
+    "  │ SQNR (Theoret.):  " <> pad_float(theoretical_sqnr) <> " dB       │",
   )
   io.println(
     "  │ Gap:              "
@@ -219,10 +219,10 @@ fn benchmark_nf4_full(original: Tensor, original_bytes: Int) {
 
   io.println("")
   io.println(
-    "  Compressão: " <> float_to_str(quantized.compression_ratio) <> "x",
+    "  Compression: " <> float_to_str(quantized.compression_ratio) <> "x",
   )
   io.println(
-    "  Memória: " <> int.to_string(quantized.memory_bytes / 1024) <> " KB",
+    "  Memory: " <> int.to_string(quantized.memory_bytes / 1024) <> " KB",
   )
 
   // Double Quantization
@@ -230,8 +230,8 @@ fn benchmark_nf4_full(original: Tensor, original_bytes: Int) {
   io.println("  ─── Double Quantization (NF4 + DQ) ───")
   let dq = nf4.double_quantize(original, config)
   let dq_ratio = int.to_float(original_bytes) /. int.to_float(dq.memory_bytes)
-  io.println("  Compressão DQ: " <> float_to_str(dq_ratio) <> "x")
-  io.println("  Memória DQ: " <> int.to_string(dq.memory_bytes / 1024) <> " KB")
+  io.println("  DQ Compression: " <> float_to_str(dq_ratio) <> "x")
+  io.println("  DQ Memory: " <> int.to_string(dq.memory_bytes / 1024) <> " KB")
   io.println("")
 }
 
@@ -250,22 +250,22 @@ fn benchmark_awq_full(original: Tensor, original_bytes: Int) {
     "└─────────────────────────────────────────────────────────────────────────┘",
   )
 
-  // Gera dados de calibração simulados
+  // Generate simulated calibration data
   let calibration_data = generate_calibration_data(64, 512)
 
   let config = awq.default_config()
   let quantized = awq.quantize_awq(original, calibration_data, config)
   let recovered = awq.dequantize_awq(quantized)
 
-  // Métricas completas
+  // Full metrics
   let quant_metrics = metrics.compute_all(original, recovered)
 
-  // SQNR teórico para 4 bits (AWQ usa 4-bit por padrão)
+  // Theoretical SQNR for 4 bits (AWQ uses 4-bit by default)
   let theoretical_sqnr = metrics.theoretical_sqnr(4)
 
   io.println("")
   io.println("  ┌─────────────────────────────────────────────┐")
-  io.println("  │ MÉTRICAS DE QUALIDADE                       │")
+  io.println("  │ QUALITY METRICS                              │")
   io.println("  ├─────────────────────────────────────────────┤")
   io.println(
     "  │ MSE:              " <> pad_float(quant_metrics.mse) <> "          │",
@@ -296,7 +296,7 @@ fn benchmark_awq_full(original: Tensor, original_bytes: Int) {
     "  │ SNR (Real):       " <> pad_float(quant_metrics.snr_db) <> " dB       │",
   )
   io.println(
-    "  │ SQNR (Teórico):   " <> pad_float(theoretical_sqnr) <> " dB       │",
+    "  │ SQNR (Theoret.):  " <> pad_float(theoretical_sqnr) <> " dB       │",
   )
   io.println(
     "  │ Gap:              "
@@ -308,25 +308,25 @@ fn benchmark_awq_full(original: Tensor, original_bytes: Int) {
   let ratio =
     int.to_float(original_bytes) /. int.to_float(quantized.memory_bytes)
   io.println("")
-  io.println("  Compressão: " <> float_to_str(ratio) <> "x")
+  io.println("  Compression: " <> float_to_str(ratio) <> "x")
   io.println(
-    "  Memória: " <> int.to_string(quantized.memory_bytes / 1024) <> " KB",
+    "  Memory: " <> int.to_string(quantized.memory_bytes / 1024) <> " KB",
   )
 
-  // Análise de saliência
+  // Salience analysis
   io.println("")
-  io.println("  ─── Análise de Saliência (AWQ Insight) ───")
+  io.println("  ─── Salience Analysis (AWQ Insight) ───")
   let activation_stats = awq.collect_activation_stats(calibration_data)
   let salient = awq.identify_salient_channels(activation_stats, 1.0)
   io.println(
-    "  Canais salientes (top 1%): " <> int.to_string(list.length(salient)),
+    "  Salient channels (top 1%): " <> int.to_string(list.length(salient)),
   )
-  io.println("  Esses ~1% dominam o erro de quantização!")
+  io.println("  These ~1% dominate the quantization error!")
   io.println("")
 }
 
 // ============================================================================
-// TABELA COMPARATIVA
+// COMPARISON TABLE
 // ============================================================================
 
 fn print_comparison_table(original: Tensor, original_bytes: Int) {
@@ -335,14 +335,14 @@ fn print_comparison_table(original: Tensor, original_bytes: Int) {
     "╔═══════════════════════════════════════════════════════════════════════════╗",
   )
   io.println(
-    "║                    TABELA COMPARATIVA FINAL                               ║",
+    "║                       FINAL COMPARISON TABLE                             ║",
   )
   io.println(
     "╚═══════════════════════════════════════════════════════════════════════════╝",
   )
   io.println("")
 
-  // Coleta métricas de cada método
+  // Collect metrics for each method
   let int8_q = compression.quantize_int8(original)
   let int8_r = compression.dequantize(int8_q)
   let int8_m = metrics.compute_all(original, int8_r)
@@ -358,7 +358,7 @@ fn print_comparison_table(original: Tensor, original_bytes: Int) {
   let awq_r = awq.dequantize_awq(awq_q)
   let awq_m = metrics.compute_all(original, awq_r)
 
-  // SQNR teóricos
+  // Theoretical SQNRs
   let sqnr_8 = metrics.theoretical_sqnr(8)
   let sqnr_4 = metrics.theoretical_sqnr(4)
 
@@ -373,7 +373,7 @@ fn print_comparison_table(original: Tensor, original_bytes: Int) {
     "┌────────────┬───────────┬──────────┬───────────┬───────────┬──────────┐",
   )
   io.println(
-    "│ Método     │ Compres.  │ SNR Real │ SNR Teór. │ Gap       │ Cosine   │",
+    "│ Method     │ Compr.    │ SNR Real │ SNR Theor.│ Gap       │ Cosine   │",
   )
   io.println(
     "├────────────┼───────────┼──────────┼───────────┼───────────┼──────────┤",
@@ -432,18 +432,18 @@ fn print_comparison_table(original: Tensor, original_bytes: Int) {
   )
 
   io.println("")
-  io.println("LEGENDA:")
-  io.println("  - Compres.: Taxa de compressão (maior = melhor)")
-  io.println("  - SNR Real: Signal-to-Noise Ratio medido (maior = melhor)")
-  io.println("  - SNR Teór.: SQNR teórico = 6.02*N + 1.76 dB")
-  io.println("  - Gap: Diferença entre teórico e real (menor = melhor)")
-  io.println("  - Cosine: Similaridade cosseno (1.0 = perfeito)")
+  io.println("LEGEND:")
+  io.println("  - Compr.: Compression ratio (higher = better)")
+  io.println("  - SNR Real: Measured Signal-to-Noise Ratio (higher = better)")
+  io.println("  - SNR Theor.: Theoretical SQNR = 6.02*N + 1.76 dB")
+  io.println("  - Gap: Difference between theoretical and real (lower = better)")
+  io.println("  - Cosine: Cosine similarity (1.0 = perfect)")
 
   io.println("")
   io.println("INSIGHTS:")
-  io.println("  - INT8: Gap pequeno = quantização eficiente")
-  io.println("  - NF4: Melhor que Q4 uniforme por usar quantis normais")
-  io.println("  - AWQ: Foca em canais salientes para minimizar erro")
+  io.println("  - INT8: Small gap = efficient quantization")
+  io.println("  - NF4: Better than uniform Q4 by using normal quantiles")
+  io.println("  - AWQ: Focuses on salient channels to minimize error")
 }
 
 // ============================================================================

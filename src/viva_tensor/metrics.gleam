@@ -1,18 +1,18 @@
-//// Métricas Avançadas para Quantização
+//// Advanced Metrics for Quantization
 ////
-//// Baseado na análise do Qwen3-235B sobre algoritmos state-of-the-art:
+//// Based on Qwen3-235B analysis of state-of-the-art algorithms:
 //// - MSE (Mean Squared Error)
 //// - MAE (Mean Absolute Error)
 //// - Cosine Similarity
 //// - SNR (Signal-to-Noise Ratio)
 //// - SQNR (Signal-to-Quantization-Noise Ratio)
-//// - Perplexity Delta (para LLMs)
+//// - Perplexity Delta (for LLMs)
 ////
-//// INSIGHTS DO QWEN3:
-//// 1. AWQ: Proteger 1% dos pesos salientes reduz erro drasticamente
-//// 2. NF4: Quantis não-uniformes (distribuição normal) > uniformes
-//// 3. GPTQ: Ponderar erro pelo Hessian melhora precisão
-//// 4. Flash Attention: Online softmax com shifting evita overflow
+//// QWEN3 INSIGHTS:
+//// 1. AWQ: Protecting 1% of salient weights drastically reduces error
+//// 2. NF4: Non-uniform quantiles (normal distribution) > uniform
+//// 3. GPTQ: Weighting error by Hessian improves precision
+//// 4. Flash Attention: Online softmax with shifting avoids overflow
 
 import gleam/float
 import gleam/int
@@ -22,10 +22,10 @@ import gleam/string
 import viva_tensor/tensor.{type Tensor, Tensor}
 
 // ============================================================================
-// TIPOS
+// TYPES
 // ============================================================================
 
-/// Métricas completas de quantização
+/// Complete quantization metrics
 pub type QuantMetrics {
   QuantMetrics(
     /// Mean Squared Error
@@ -34,7 +34,7 @@ pub type QuantMetrics {
     mae: Float,
     /// Root Mean Squared Error
     rmse: Float,
-    /// Cosine Similarity (1.0 = perfeito)
+    /// Cosine Similarity (1.0 = perfect)
     cosine_sim: Float,
     /// Signal-to-Noise Ratio (dB)
     snr_db: Float,
@@ -42,25 +42,25 @@ pub type QuantMetrics {
     sqnr_db: Float,
     /// Max absolute error
     max_error: Float,
-    /// Percentil 99 do erro
+    /// 99th percentile of error
     p99_error: Float,
-    /// Porcentagem de valores com erro > 1%
+    /// Percentage of values with error > 1%
     outlier_pct: Float,
   )
 }
 
-/// Métricas por camada (para LLMs)
+/// Per-layer metrics (for LLMs)
 pub type LayerMetrics {
   LayerMetrics(
     layer_name: String,
     metrics: QuantMetrics,
     sensitivity: Float,
-    // Quão sensível é essa camada
+    // How sensitive this layer is
   )
 }
 
 // ============================================================================
-// MÉTRICAS BÁSICAS
+// BASIC METRICS
 // ============================================================================
 
 /// MSE - Mean Squared Error
@@ -99,8 +99,8 @@ pub fn rmse(original: Tensor, quantized: Tensor) -> Float {
   }
 }
 
-/// Cosine Similarity - mede direção, não magnitude
-/// 1.0 = vetores idênticos, 0.0 = ortogonais, -1.0 = opostos
+/// Cosine Similarity - measures direction, not magnitude
+/// 1.0 = identical vectors, 0.0 = orthogonal, -1.0 = opposite
 pub fn cosine_similarity(original: Tensor, quantized: Tensor) -> Float {
   let orig = tensor.to_list(original)
   let quant = tensor.to_list(quantized)
@@ -129,7 +129,7 @@ pub fn cosine_similarity(original: Tensor, quantized: Tensor) -> Float {
   }
 }
 
-/// SNR - Signal-to-Noise Ratio em dB
+/// SNR - Signal-to-Noise Ratio in dB
 /// SNR = 10 * log10(signal_power / noise_power)
 pub fn snr_db(original: Tensor, quantized: Tensor) -> Float {
   let orig = tensor.to_list(original)
@@ -151,21 +151,21 @@ pub fn snr_db(original: Tensor, quantized: Tensor) -> Float {
     |> list.fold(0.0, fn(acc, x) { acc +. x })
     |> fn(sum) { sum /. int.to_float(list.length(orig)) }
 
-  // Evita divisão por zero
+  // Avoid division by zero
   case noise_power >. 0.0 {
     True -> 10.0 *. log10(signal_power /. noise_power)
     False -> 100.0
-    // Sem ruído = SNR infinito, capped
+    // No noise = infinite SNR, capped
   }
 }
 
 /// SQNR - Signal-to-Quantization-Noise Ratio
-/// Teórico para N bits: SQNR = 6.02 * N + 1.76 dB
+/// Theoretical for N bits: SQNR = 6.02 * N + 1.76 dB
 pub fn theoretical_sqnr(bits: Int) -> Float {
   6.02 *. int.to_float(bits) +. 1.76
 }
 
-/// Max Error - pior caso
+/// Max Error - worst case
 pub fn max_error(original: Tensor, quantized: Tensor) -> Float {
   let orig = tensor.to_list(original)
   let quant = tensor.to_list(quantized)
@@ -175,10 +175,10 @@ pub fn max_error(original: Tensor, quantized: Tensor) -> Float {
 }
 
 // ============================================================================
-// MÉTRICAS AVANÇADAS
+// ADVANCED METRICS
 // ============================================================================
 
-/// Percentil do erro (aproximado via sorting)
+/// Error percentile (approximated via sorting)
 pub fn error_percentile(
   original: Tensor,
   quantized: Tensor,
@@ -205,7 +205,7 @@ pub fn error_percentile(
   }
 }
 
-/// Porcentagem de outliers (erro > threshold)
+/// Percentage of outliers (error > threshold)
 pub fn outlier_percentage(
   original: Tensor,
   quantized: Tensor,
@@ -223,10 +223,10 @@ pub fn outlier_percentage(
 }
 
 // ============================================================================
-// MÉTRICAS COMPLETAS
+// COMPLETE METRICS
 // ============================================================================
 
-/// Computa todas as métricas de uma vez
+/// Computes all metrics at once
 pub fn compute_all(original: Tensor, quantized: Tensor) -> QuantMetrics {
   let mse_val = mse(original, quantized)
   let mae_val = mae(original, quantized)
@@ -237,7 +237,7 @@ pub fn compute_all(original: Tensor, quantized: Tensor) -> QuantMetrics {
   let cosine_val = cosine_similarity(original, quantized)
   let snr_val = snr_db(original, quantized)
   let sqnr_val = snr_val
-  // Para quantização, SNR ≈ SQNR
+  // For quantization, SNR ≈ SQNR
   let max_err = max_error(original, quantized)
   let p99 = error_percentile(original, quantized, 99.0)
   let outliers = outlier_percentage(original, quantized, 0.01)
@@ -256,10 +256,10 @@ pub fn compute_all(original: Tensor, quantized: Tensor) -> QuantMetrics {
 }
 
 // ============================================================================
-// SALIENCY - Insight do AWQ
+// SALIENCY - AWQ Insight
 // ============================================================================
 
-/// Computa saliência de pesos baseado em ativações
+/// Computes weight saliency based on activations
 /// Salience(w) = Var(activation) * w²
 pub fn compute_saliency(
   weights: Tensor,
@@ -306,7 +306,7 @@ pub fn compute_saliency(
   list.map2(padded_vars, w_data, fn(var, w) { var *. w *. w })
 }
 
-/// Identifica top K% de pesos salientes
+/// Identifies top K% of salient weights
 pub fn find_salient_weights(saliency: List(Float), top_pct: Float) -> List(Int) {
   // Index + saliency pairs
   let indexed = list.index_map(saliency, fn(s, i) { #(i, s) })
@@ -342,17 +342,17 @@ pub fn benchmark_metrics() {
     "╔═══════════════════════════════════════════════════════════════╗",
   )
   io.println(
-    "║          MÉTRICAS DE QUANTIZAÇÃO - BENCHMARK                  ║",
+    "║          QUANTIZATION METRICS - BENCHMARK                     ║",
   )
   io.println(
     "╚═══════════════════════════════════════════════════════════════╝",
   )
   io.println("")
 
-  // Criar tensor de teste
+  // Create test tensor
   let original = tensor.random_normal([1024], 0.0, 1.0)
 
-  // Simular quantização com diferentes níveis de ruído
+  // Simulate quantization with different noise levels
   let small_noise = add_noise(original, 0.01)
   let medium_noise = add_noise(original, 0.05)
   let large_noise = add_noise(original, 0.1)
@@ -361,7 +361,7 @@ pub fn benchmark_metrics() {
   io.println("")
 
   io.println("┌────────────────┬────────────┬────────────┬────────────┐")
-  io.println("│ Métrica        │ Ruído 1%   │ Ruído 5%   │ Ruído 10%  │")
+  io.println("│ Metric         │ Noise 1%   │ Noise 5%   │ Noise 10%  │")
   io.println("├────────────────┼────────────┼────────────┼────────────┤")
 
   let m1 = compute_all(original, small_noise)
@@ -434,7 +434,7 @@ pub fn benchmark_metrics() {
   io.println("└────────────────┴────────────┴────────────┴────────────┘")
 
   io.println("")
-  io.println("Teórico SQNR:")
+  io.println("Theoretical SQNR:")
   io.println("  INT8 (8 bits): " <> float_to_str(theoretical_sqnr(8)) <> " dB")
   io.println("  INT4 (4 bits): " <> float_to_str(theoretical_sqnr(4)) <> " dB")
   io.println("  INT2 (2 bits): " <> float_to_str(theoretical_sqnr(2)) <> " dB")
@@ -450,7 +450,7 @@ fn add_noise(t: Tensor, noise_level: Float) -> Tensor {
   let data = tensor.to_list(t)
   let noisy =
     list.index_map(data, fn(x, i) {
-      // Pseudo-random noise baseado no índice
+      // Pseudo-random noise based on index
       let noise = int.to_float(i % 100 - 50) /. 50.0 *. noise_level
       x +. noise
     })
@@ -468,7 +468,7 @@ fn log10(x: Float) -> Float {
   // log10(x) = ln(x) / ln(10)
   case x >. 0.0 {
     True -> {
-      // Aproximação simples
+      // Simple approximation
       let ln_10 = 2.302585093
       approximate_ln(x) /. ln_10
     }
@@ -478,14 +478,14 @@ fn log10(x: Float) -> Float {
 
 fn approximate_ln(x: Float) -> Float {
   // ln(x) ≈ 2 * sum((y-1)/(y+1))^(2n+1) / (2n+1)
-  // onde y = x
-  // Simplificado para range comum
+  // where y = x
+  // Simplified for common range
   case x {
     v if v <. 0.001 -> -7.0
     v if v <. 0.01 -> -4.6
     v if v <. 0.1 -> -2.3
     v if v <. 1.0 -> v -. 1.0
-    // Aproximação linear perto de 1
+    // Linear approximation near 1
     v if v <. 10.0 -> { v -. 1.0 } /. v *. 2.0
     v if v <. 100.0 -> 2.3 +. { v /. 10.0 -. 1.0 } /. { v /. 10.0 }
     _ -> 4.6

@@ -2,20 +2,20 @@
 # viva_tensor - Makefile Cross-Platform (Unix/Windows)
 # =============================================================================
 #
-# Uso:
-#   make build      - Compila o projeto
-#   make test       - Roda os testes
-#   make bench      - Roda benchmarks e salva em output/
-#   make demo       - Roda a demonstração
-#   make docs       - Gera documentação
-#   make clean      - Limpa artefatos de build
-#   make fmt        - Formata o código
-#   make check      - Verifica tipos
+# Usage:
+#   make build      - Build the project
+#   make test       - Run tests
+#   make bench      - Run benchmarks and save to output/
+#   make demo       - Run the demonstration
+#   make docs       - Generate documentation
+#   make clean      - Clean build artifacts
+#   make fmt        - Format code
+#   make check      - Type check
 #   make all        - Build + test + bench
 #
 # =============================================================================
 
-# Detecta o sistema operacional
+# Detect operating system
 ifeq ($(OS),Windows_NT)
     SHELL := cmd.exe
     RM := del /Q /F
@@ -38,19 +38,19 @@ else
     NULL := /dev/null
 endif
 
-# Diretórios
+# Directories
 SRC_DIR := src
 TEST_DIR := test
 OUTPUT_DIR := output
 DOCS_DIR := docs
 BUILD_DIR := build
 
-# Arquivos de saída
+# Output files
 BENCH_OUTPUT := $(OUTPUT_DIR)$(SEP)benchmark_$(DATE).txt
 DEMO_OUTPUT := $(OUTPUT_DIR)$(SEP)demo_$(DATE).txt
 METRICS_OUTPUT := $(OUTPUT_DIR)$(SEP)metrics_$(DATE).txt
 
-# Cores para output (Unix only)
+# Colors for output (Unix only)
 ifneq ($(OS),Windows_NT)
     GREEN := \033[0;32m
     RED := \033[0;31m
@@ -64,80 +64,80 @@ else
 endif
 
 # =============================================================================
-# TARGETS PRINCIPAIS
+# MAIN TARGETS
 # =============================================================================
 
 .PHONY: all build test bench demo docs clean fmt check help
 
-## Compila, testa e roda benchmarks
+## Build, test, and run benchmarks
 all: build test bench
-	@echo "$(GREEN)[OK]$(NC) Build completo!"
+	@echo "$(GREEN)[OK]$(NC) Build complete!"
 
-## Compila o projeto
+## Build the project
 build:
-	@echo "$(YELLOW)[BUILD]$(NC) Compilando viva_tensor..."
+	@echo "$(YELLOW)[BUILD]$(NC) Building viva_tensor..."
 	gleam build
-	@echo "$(GREEN)[OK]$(NC) Build concluido!"
+	@echo "$(GREEN)[OK]$(NC) Build finished!"
 
-## Roda os testes
+## Run tests
 test:
-	@echo "$(YELLOW)[TEST]$(NC) Executando testes..."
+	@echo "$(YELLOW)[TEST]$(NC) Running tests..."
 	gleam test
-	@echo "$(GREEN)[OK]$(NC) Testes concluidos!"
+	@echo "$(GREEN)[OK]$(NC) Tests finished!"
 
-## Roda benchmarks e salva em output/
+## Run benchmarks and save to output/
 bench: build ensure-output
-	@echo "$(YELLOW)[BENCH]$(NC) Executando benchmarks..."
+	@echo "$(YELLOW)[BENCH]$(NC) Running benchmarks..."
 	@echo "=== viva_tensor Benchmark - $(DATE) ===" > $(BENCH_OUTPUT)
 	@echo "" >> $(BENCH_OUTPUT)
 	gleam run -m bench/full >> $(BENCH_OUTPUT) 2>&1
 	@echo "" >> $(BENCH_OUTPUT)
-	@echo "=== Benchmark Concluido ===" >> $(BENCH_OUTPUT)
-	@echo "$(GREEN)[OK]$(NC) Benchmark salvo em: $(BENCH_OUTPUT)"
+	@echo "=== Benchmark Complete ===" >> $(BENCH_OUTPUT)
+	@echo "$(GREEN)[OK]$(NC) Benchmark saved to: $(BENCH_OUTPUT)"
 
-## Roda métricas avançadas
+## Run advanced metrics
 metrics: build ensure-output
-	@echo "$(YELLOW)[METRICS]$(NC) Executando metricas..."
-	@echo "=== viva_tensor Metricas - $(DATE) ===" > $(METRICS_OUTPUT)
+	@echo "$(YELLOW)[METRICS]$(NC) Running metrics..."
+	@echo "=== viva_tensor Metrics - $(DATE) ===" > $(METRICS_OUTPUT)
 	gleam run -m viva_tensor/metrics >> $(METRICS_OUTPUT) 2>&1
-	@echo "$(GREEN)[OK]$(NC) Metricas salvas em: $(METRICS_OUTPUT)"
+	@echo "$(GREEN)[OK]$(NC) Metrics saved to: $(METRICS_OUTPUT)"
 
-## Roda a demonstração completa
+## Run the full demonstration
 demo: build ensure-output
-	@echo "$(YELLOW)[DEMO]$(NC) Executando demonstracao..."
+	@echo "$(YELLOW)[DEMO]$(NC) Running demonstration..."
 	@echo "=== viva_tensor Demo - $(DATE) ===" > $(DEMO_OUTPUT)
 	gleam run -m examples/demo >> $(DEMO_OUTPUT) 2>&1
-	@echo "$(GREEN)[OK]$(NC) Demo salva em: $(DEMO_OUTPUT)"
+	@echo "$(GREEN)[OK]$(NC) Demo saved to: $(DEMO_OUTPUT)"
 
-## Gera documentação
+## Generate documentation
 docs:
-	@echo "$(YELLOW)[DOCS]$(NC) Gerando documentacao..."
+	@echo "$(YELLOW)[DOCS]$(NC) Generating documentation..."
 	gleam docs build
-	@echo "$(GREEN)[OK]$(NC) Docs geradas em: build/docs/"
+	@echo "$(GREEN)[OK]$(NC) Docs generated at: build/docs/"
 
-## Formata o código
+## Format code
 fmt:
-	@echo "$(YELLOW)[FMT]$(NC) Formatando codigo..."
+	@echo "$(YELLOW)[FMT]$(NC) Formatting code..."
 	gleam format $(SRC_DIR) $(TEST_DIR)
-	@echo "$(GREEN)[OK]$(NC) Codigo formatado!"
+	@echo "$(GREEN)[OK]$(NC) Code formatted!"
 
-## Verifica tipos sem compilar
+## Type check without building
 check:
-	@echo "$(YELLOW)[CHECK]$(NC) Verificando tipos..."
+	@echo "$(YELLOW)[CHECK]$(NC) Checking types..."
 	gleam check
-	@echo "$(GREEN)[OK]$(NC) Tipos OK!"
+	@echo "$(GREEN)[OK]$(NC) Types OK!"
 
-## Limpa artefatos de build
+## Clean build artifacts
 clean:
-	@echo "$(YELLOW)[CLEAN]$(NC) Limpando artefatos..."
+	@echo "$(YELLOW)[CLEAN]$(NC) Cleaning artifacts..."
 ifeq ($(OS),Windows_NT)
 	@if exist $(BUILD_DIR) $(RMDIR) $(BUILD_DIR)
 else
 	@$(RMDIR) $(BUILD_DIR) 2>$(NULL) || true
 endif
-	@echo "$(GREEN)[OK]$(NC) Limpo!"
+	@echo "$(GREEN)[OK]$(NC) Clean!"
 
-## Cria diretório output se não existir
+## Create output directory if it doesn't exist
 ensure-output:
 ifeq ($(OS),Windows_NT)
 	@if not exist $(OUTPUT_DIR) $(MKDIR) $(OUTPUT_DIR)
@@ -185,83 +185,83 @@ build-all: build nif
 	@echo "$(GREEN)[OK]$(NC) Full build (Gleam + NIF) complete!"
 
 # =============================================================================
-# BENCHMARKS ESPECÍFICOS
+# SPECIFIC BENCHMARKS
 # =============================================================================
 
 ## Benchmark INT8
 bench-int8: build ensure-output
 	@echo "$(YELLOW)[BENCH]$(NC) INT8 Quantization..."
 	gleam run -m viva_tensor/compression > $(OUTPUT_DIR)$(SEP)int8_$(DATE).txt 2>&1
-	@echo "$(GREEN)[OK]$(NC) Salvo em output/"
+	@echo "$(GREEN)[OK]$(NC) Saved to output/"
 
 ## Benchmark NF4
 bench-nf4: build ensure-output
 	@echo "$(YELLOW)[BENCH]$(NC) NF4 Quantization..."
 	gleam run -m viva_tensor/nf4 > $(OUTPUT_DIR)$(SEP)nf4_$(DATE).txt 2>&1
-	@echo "$(GREEN)[OK]$(NC) Salvo em output/"
+	@echo "$(GREEN)[OK]$(NC) Saved to output/"
 
 ## Benchmark AWQ
 bench-awq: build ensure-output
 	@echo "$(YELLOW)[BENCH]$(NC) AWQ Quantization..."
 	gleam run -m viva_tensor/awq > $(OUTPUT_DIR)$(SEP)awq_$(DATE).txt 2>&1
-	@echo "$(GREEN)[OK]$(NC) Salvo em output/"
+	@echo "$(GREEN)[OK]$(NC) Saved to output/"
 
 ## Benchmark Flash Attention
 bench-flash: build ensure-output
 	@echo "$(YELLOW)[BENCH]$(NC) Flash Attention..."
 	gleam run -m viva_tensor/flash_attention > $(OUTPUT_DIR)$(SEP)flash_$(DATE).txt 2>&1
-	@echo "$(GREEN)[OK]$(NC) Salvo em output/"
+	@echo "$(GREEN)[OK]$(NC) Saved to output/"
 
 ## Benchmark 2:4 Sparsity
 bench-sparse: build ensure-output
 	@echo "$(YELLOW)[BENCH]$(NC) 2:4 Sparsity..."
 	gleam run -m viva_tensor/sparsity > $(OUTPUT_DIR)$(SEP)sparsity_$(DATE).txt 2>&1
-	@echo "$(GREEN)[OK]$(NC) Salvo em output/"
+	@echo "$(GREEN)[OK]$(NC) Saved to output/"
 
-## Todos os benchmarks individuais
+## All individual benchmarks
 bench-all: bench-int8 bench-nf4 bench-awq bench-flash bench-sparse bench
-	@echo "$(GREEN)[OK]$(NC) Todos os benchmarks concluidos!"
+	@echo "$(GREEN)[OK]$(NC) All benchmarks complete!"
 
 # =============================================================================
-# DESENVOLVIMENTO
+# DEVELOPMENT
 # =============================================================================
 
-## Roda em modo watch (recompila ao salvar)
+## Run in watch mode (recompiles on save)
 watch:
-	@echo "$(YELLOW)[WATCH]$(NC) Modo watch ativado..."
+	@echo "$(YELLOW)[WATCH]$(NC) Watch mode enabled..."
 	gleam run --watch
 
-## Instala dependências
+## Install dependencies
 deps:
-	@echo "$(YELLOW)[DEPS]$(NC) Baixando dependencias..."
+	@echo "$(YELLOW)[DEPS]$(NC) Downloading dependencies..."
 	gleam deps download
-	@echo "$(GREEN)[OK]$(NC) Dependencias instaladas!"
+	@echo "$(GREEN)[OK]$(NC) Dependencies installed!"
 
-## Publica no Hex
+## Publish to Hex
 publish:
-	@echo "$(YELLOW)[PUBLISH]$(NC) Publicando no Hex..."
+	@echo "$(YELLOW)[PUBLISH]$(NC) Publishing to Hex..."
 	gleam publish
-	@echo "$(GREEN)[OK]$(NC) Publicado!"
+	@echo "$(GREEN)[OK]$(NC) Published!"
 
 # =============================================================================
 # HELP
 # =============================================================================
 
-## Mostra ajuda
+## Show help
 help:
 	@echo ""
 	@echo "viva_tensor - Makefile Cross-Platform"
 	@echo "======================================"
 	@echo ""
-	@echo "Comandos principais:"
-	@echo "  make build       - Compila o projeto"
-	@echo "  make test        - Roda os testes"
-	@echo "  make bench       - Roda benchmarks (salva em output/)"
-	@echo "  make demo        - Roda demonstracao"
-	@echo "  make docs        - Gera documentacao"
-	@echo "  make fmt         - Formata codigo"
-	@echo "  make check       - Verifica tipos"
-	@echo "  make clean       - Limpa build"
+	@echo "Main commands:"
+	@echo "  make build       - Build the project"
+	@echo "  make test        - Run tests"
+	@echo "  make bench       - Run benchmarks (saves to output/)"
+	@echo "  make demo        - Run demonstration"
+	@echo "  make docs        - Generate documentation"
+	@echo "  make fmt         - Format code"
+	@echo "  make check       - Type check"
+	@echo "  make clean       - Clean build"
 	@echo "  make all         - Build + test + bench"
 	@echo ""
 	@echo "NIF (macOS only):"
@@ -270,16 +270,16 @@ help:
 	@echo "  make nif-info    - Show NIF build info"
 	@echo "  make build-all   - Build Gleam + NIF"
 	@echo ""
-	@echo "Benchmarks especificos:"
+	@echo "Specific benchmarks:"
 	@echo "  make bench-int8  - Benchmark INT8"
 	@echo "  make bench-nf4   - Benchmark NF4"
 	@echo "  make bench-awq   - Benchmark AWQ"
 	@echo "  make bench-flash - Benchmark Flash Attention"
 	@echo "  make bench-sparse- Benchmark 2:4 Sparsity"
-	@echo "  make bench-all   - Todos os benchmarks"
+	@echo "  make bench-all   - All benchmarks"
 	@echo ""
-	@echo "Desenvolvimento:"
-	@echo "  make deps        - Instala dependencias"
-	@echo "  make watch       - Modo watch"
-	@echo "  make publish     - Publica no Hex"
+	@echo "Development:"
+	@echo "  make deps        - Install dependencies"
+	@echo "  make watch       - Watch mode"
+	@echo "  make publish     - Publish to Hex"
 	@echo ""

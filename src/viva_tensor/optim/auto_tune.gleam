@@ -1,12 +1,12 @@
 //// Auto-Tuning System - Self-Optimizing Tensor Library
 ////
-//// Inspirado pelas pesquisas do HuggingChat + ggml + Candle
+//// Inspired by HuggingChat + ggml + Candle research
 ////
 //// Features:
-//// 1. GPU Auto-Detection (detecta VRAM, load, capabilities)
-//// 2. Adaptive Quantization (int8 para inference, fp32 para training)
-//// 3. Zero-Copy entre Gleam e Rust NIFs
-//// 4. Auto Batch Size Optimizer (aprende o melhor batch para o hardware)
+//// 1. GPU Auto-Detection (detects VRAM, load, capabilities)
+//// 2. Adaptive Quantization (int8 for inference, fp32 for training)
+//// 3. Zero-Copy between Gleam and Rust NIFs
+//// 4. Auto Batch Size Optimizer (learns the best batch for the hardware)
 ////
 //// Target: RTX 4090 24GB VRAM + 32GB RAM
 
@@ -17,17 +17,17 @@ import gleam/list
 import viva_tensor/tensor.{type Tensor}
 
 // ============================================================================
-// TIPOS - HARDWARE DETECTION
+// TYPES - HARDWARE DETECTION
 // ============================================================================
 
-/// Device type detectado
+/// Detected device type
 pub type Device {
   Cuda(gpu_id: Int, vram_gb: Float)
   Metal(device_id: Int)
   Cpu(cores: Int)
 }
 
-/// Hardware profile completo
+/// Complete hardware profile
 pub type HardwareProfile {
   HardwareProfile(
     device: Device,
@@ -39,17 +39,17 @@ pub type HardwareProfile {
   )
 }
 
-/// Modo de quantização
+/// Quantization mode
 pub type QuantMode {
   Inference
-  // INT8 - 4x menos memória, mais rápido
+  // INT8 - 4x less memory, faster
   Training
-  // FP32 - precisão total
+  // FP32 - full precision
   Adaptive
-  // Escolhe automaticamente
+  // Chooses automatically
 }
 
-/// Estado do auto-tuner
+/// Auto-tuner state
 pub type AutoTuner {
   AutoTuner(
     hardware: HardwareProfile,
@@ -59,31 +59,31 @@ pub type AutoTuner {
   )
 }
 
-/// Resultado de uma execução de batch
+/// Result of a batch execution
 pub type BatchResult {
   BatchResult(batch_size: Int, duration_ms: Float, throughput: Float)
 }
 
 // ============================================================================
-// DETECÇÃO DE HARDWARE
+// HARDWARE DETECTION
 // ============================================================================
 
-/// Detecta hardware disponível
+/// Detects available hardware
 pub fn detect_hardware() -> HardwareProfile {
-  // Por enquanto retorna perfil do GATO-PC
-  // Em produção: chamaria NIF para gfxinfo/nvml
+  // For now returns the GATO-PC profile
+  // In production: would call NIF for gfxinfo/nvml
   HardwareProfile(
     device: Cuda(gpu_id: 0, vram_gb: 24.0),
     total_vram_gb: 24.0,
     available_vram_gb: 20.0,
-    // 4GB reservado para sistema
+    // 4GB reserved for system
     total_ram_gb: 32.0,
     gpu_load_pct: 0.0,
     optimal_batch_size: 32,
   )
 }
 
-/// Cria auto-tuner para CPU-only
+/// Creates auto-tuner for CPU-only
 pub fn detect_cpu_only() -> HardwareProfile {
   HardwareProfile(
     device: Cpu(cores: 16),
@@ -99,7 +99,7 @@ pub fn detect_cpu_only() -> HardwareProfile {
 // AUTO-TUNER
 // ============================================================================
 
-/// Cria novo auto-tuner
+/// Creates new auto-tuner
 pub fn new() -> AutoTuner {
   let hardware = detect_hardware()
   let batch_size = get_default_batch_size(hardware.device)
@@ -112,31 +112,31 @@ pub fn new() -> AutoTuner {
   )
 }
 
-/// Batch size padrão baseado no device
+/// Default batch size based on device
 fn get_default_batch_size(device: Device) -> Int {
   case device {
     Cuda(_, vram_gb) -> {
-      // Escala com VRAM disponível
+      // Scales with available VRAM
       case vram_gb >=. 20.0 {
         True -> 64
-        // RTX 4090 com bastante VRAM
+        // RTX 4090 with plenty of VRAM
         False ->
           case vram_gb >=. 10.0 {
             True -> 32
             // RTX 3080/4080
             False -> 16
-            // GPUs menores
+            // Smaller GPUs
           }
       }
     }
     Metal(_) -> 16
-    // Apple Silicon é eficiente com batches menores
+    // Apple Silicon is efficient with smaller batches
     Cpu(_) -> 8
     // BEAM CPU-only
   }
 }
 
-/// Registra resultado de execução e otimiza
+/// Records execution result and optimizes
 pub fn profile(
   tuner: AutoTuner,
   batch_size: Int,
@@ -151,19 +151,19 @@ pub fn profile(
       throughput: throughput,
     )
 
-  // Adiciona ao histórico (mantém últimos 20)
+  // Add to history (keep last 20)
   let new_history = case list.length(tuner.history) >= 20 {
     True -> [result, ..list.take(tuner.history, 19)]
     False -> [result, ..tuner.history]
   }
 
-  // Encontra batch size ótimo
+  // Find optimal batch size
   let optimal = find_optimal_batch_size(new_history, tuner.hardware)
 
   AutoTuner(..tuner, history: new_history, current_batch_size: optimal)
 }
 
-/// Encontra batch size com maior throughput
+/// Finds batch size with highest throughput
 fn find_optimal_batch_size(
   history: List(BatchResult),
   hw: HardwareProfile,
@@ -171,7 +171,7 @@ fn find_optimal_batch_size(
   case history {
     [] -> get_default_batch_size(hw.device)
     _ -> {
-      // Agrupa por batch size e calcula média de throughput
+      // Group by batch size and compute average throughput
       let best =
         history
         |> list.fold(BatchResult(0, 0.0, 0.0), fn(acc, r) {
@@ -181,19 +181,19 @@ fn find_optimal_batch_size(
           }
         })
 
-      // Ajusta para memória disponível
+      // Adjust for available memory
       adjust_for_memory(best.batch_size, hw)
     }
   }
 }
 
-/// Ajusta batch size para memória disponível
+/// Adjusts batch size for available memory
 fn adjust_for_memory(batch_size: Int, hw: HardwareProfile) -> Int {
   let tensor_size_mb = 2.0
-  // ~2MB por tensor 512d fp32
+  // ~2MB per tensor 512d fp32
   let batch_memory_gb = int.to_float(batch_size) *. tensor_size_mb /. 1024.0
 
-  // Deixa 20% de headroom
+  // Leave 20% headroom
   let max_memory = hw.available_vram_gb *. 0.8
 
   case batch_memory_gb >. max_memory {
@@ -208,20 +208,20 @@ fn adjust_for_memory(batch_size: Int, hw: HardwareProfile) -> Int {
 }
 
 // ============================================================================
-// QUANTIZAÇÃO ADAPTATIVA
+// ADAPTIVE QUANTIZATION
 // ============================================================================
 
-/// Contexto de quantização
+/// Quantization context
 pub type QuantContext {
   QuantContext(mode: QuantMode, scales: List(Float))
 }
 
-/// Cria contexto de quantização
+/// Creates quantization context
 pub fn new_quant_context(mode: QuantMode) -> QuantContext {
   QuantContext(mode: mode, scales: [])
 }
 
-/// Decide modo de quantização baseado na operação
+/// Decides quantization mode based on the operation
 pub fn should_quantize(ctx: QuantContext, is_inference: Bool) -> Bool {
   case ctx.mode {
     Inference -> True
@@ -230,7 +230,7 @@ pub fn should_quantize(ctx: QuantContext, is_inference: Bool) -> Bool {
   }
 }
 
-/// Calcula escala para quantização absmax (int8)
+/// Computes scale for absmax quantization (int8)
 pub fn compute_scale(tensor: Tensor) -> Float {
   let max_val = tensor.max(tensor)
   case max_val >. 0.0 {
@@ -243,7 +243,7 @@ pub fn compute_scale(tensor: Tensor) -> Float {
 // MEMORY PRESSURE HANDLING
 // ============================================================================
 
-/// Verifica pressão de memória
+/// Checks memory pressure
 pub fn check_memory_pressure(hw: HardwareProfile) -> MemoryPressure {
   let usage_pct = 1.0 -. { hw.available_vram_gb /. hw.total_vram_gb }
 
@@ -262,7 +262,7 @@ pub type MemoryPressure {
   Critical
 }
 
-/// Estratégia baseada em pressão de memória
+/// Strategy based on memory pressure
 pub fn get_memory_strategy(pressure: MemoryPressure) -> MemoryStrategy {
   case pressure {
     Critical ->
@@ -301,10 +301,10 @@ pub type MemoryStrategy {
 }
 
 // ============================================================================
-// BENCHMARK E PROFILE
+// BENCHMARK AND PROFILE
 // ============================================================================
 
-/// Roda profile completo do hardware
+/// Runs complete hardware profile
 pub fn run_hardware_profile() {
   io.println(
     "╔══════════════════════════════════════════════════════════════════╗",
@@ -318,45 +318,45 @@ pub fn run_hardware_profile() {
 
   let hw = detect_hardware()
 
-  io.println("HARDWARE DETECTADO:")
+  io.println("DETECTED HARDWARE:")
   print_device(hw.device)
-  io.println("  VRAM Total: " <> float_to_string(hw.total_vram_gb) <> " GB")
+  io.println("  Total VRAM: " <> float_to_string(hw.total_vram_gb) <> " GB")
   io.println(
-    "  VRAM Disponível: " <> float_to_string(hw.available_vram_gb) <> " GB",
+    "  Available VRAM: " <> float_to_string(hw.available_vram_gb) <> " GB",
   )
-  io.println("  RAM Total: " <> float_to_string(hw.total_ram_gb) <> " GB")
+  io.println("  Total RAM: " <> float_to_string(hw.total_ram_gb) <> " GB")
   io.println("  GPU Load: " <> float_to_string(hw.gpu_load_pct) <> "%")
-  io.println("  Batch Size Ótimo: " <> int.to_string(hw.optimal_batch_size))
+  io.println("  Optimal Batch Size: " <> int.to_string(hw.optimal_batch_size))
 
   let pressure = check_memory_pressure(hw)
   io.println("\nMEMORY PRESSURE: " <> pressure_to_string(pressure))
 
   let strategy = get_memory_strategy(pressure)
-  io.println("ESTRATÉGIA:")
+  io.println("STRATEGY:")
   io.println("  Batch Mult: " <> float_to_string(strategy.batch_size_mult))
   io.println("  Quant Mode: " <> quant_mode_to_string(strategy.quant_mode))
-  io.println("  GC Agressivo: " <> bool_to_string(strategy.gc_aggressive))
+  io.println("  Aggressive GC: " <> bool_to_string(strategy.gc_aggressive))
 
   io.println(
     "\n╔══════════════════════════════════════════════════════════════════╗",
   )
   io.println(
-    "║  RECOMENDAÇÕES PARA RTX 4090 24GB + 32GB RAM:                   ║",
+    "║  RECOMMENDATIONS FOR RTX 4090 24GB + 32GB RAM:                  ║",
   )
   io.println(
     "║                                                                  ║",
   )
   io.println(
-    "║  1. Batch Size: 64 (pode ir até 128 com INT8)                   ║",
+    "║  1. Batch Size: 64 (can go up to 128 with INT8)                 ║",
   )
   io.println(
-    "║  2. Quantização: INT8 para inference (4x menos VRAM)            ║",
+    "║  2. Quantization: INT8 for inference (4x less VRAM)             ║",
   )
   io.println(
-    "║  3. Memory Pool: Pre-alocar 20GB para tensores                  ║",
+    "║  3. Memory Pool: Pre-allocate 20GB for tensors                   ║",
   )
   io.println(
-    "║  4. Zero-Copy: Usar Binary refs entre Gleam e Rust              ║",
+    "║  4. Zero-Copy: Use Binary refs between Gleam and Rust            ║",
   )
   io.println(
     "╚══════════════════════════════════════════════════════════════════╝",
@@ -389,9 +389,9 @@ fn print_device(device: Device) {
 
 fn pressure_to_string(p: MemoryPressure) -> String {
   case p {
-    Low -> "LOW (tudo ok)"
-    Medium -> "MEDIUM (monitorar)"
-    High -> "HIGH (reduzir batch)"
+    Low -> "LOW (all good)"
+    Medium -> "MEDIUM (monitoring)"
+    High -> "HIGH (reduce batch)"
     Critical -> "CRITICAL (emergency mode)"
   }
 }
@@ -406,8 +406,8 @@ fn quant_mode_to_string(m: QuantMode) -> String {
 
 fn bool_to_string(b: Bool) -> String {
   case b {
-    True -> "Sim"
-    False -> "Não"
+    True -> "Yes"
+    False -> "No"
   }
 }
 

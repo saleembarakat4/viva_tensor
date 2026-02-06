@@ -1,20 +1,20 @@
 //// TensorPool - Distributed Tensor Computing via OTP
 ////
-//// CONCEITO INOVADOR: GenServer + GPU
+//// INNOVATIVE CONCEPT: GenServer + GPU
 //// ===================================
 ////
-//// Em C/C++: você tem threads + mutex + condition vars (PESADELO)
-//// Em Gleam/OTP: GenServer gerencia estado, NIFs fazem GPU compute
+//// In C/C++: you have threads + mutex + condition vars (NIGHTMARE)
+//// In Gleam/OTP: GenServer manages state, NIFs do GPU compute
 ////
-//// Arquitetura:
+//// Architecture:
 ////
 ////   [Request] -> [GenServer Pool] -> [Worker 1] -> [NIF GPU] -> cuBLAS/cuDNN
 ////                                 -> [Worker 2] -> [NIF GPU] -> cuBLAS/cuDNN
 ////                                 -> [Worker N] -> [NIF GPU] -> cuBLAS/cuDNN
 ////
-//// Cada Worker é um processo BEAM leve (~2KB) que pode chamar NIFs de GPU.
-//// O GenServer faz load balancing automático.
-//// Se um Worker crashar, OTP reinicia (fault tolerance grátis!)
+//// Each Worker is a lightweight BEAM process (~2KB) that can call GPU NIFs.
+//// The GenServer does automatic load balancing.
+//// If a Worker crashes, OTP restarts it (free fault tolerance!)
 
 import gleam/float
 import gleam/int
@@ -23,40 +23,40 @@ import gleam/list
 import viva_tensor/tensor.{type Tensor}
 
 // ============================================================================
-// TIPOS PÚBLICOS
+// PUBLIC TYPES
 // ============================================================================
 
-/// Operações de tensor suportadas
+/// Supported tensor operations
 pub type TensorOp {
   Scale(Float)
   Normalize
 }
 
-/// Resultado de similarity search
+/// Similarity search result
 pub type SearchResult {
   SearchResult(index: Int, similarity: Float)
 }
 
 // ============================================================================
-// TIPOS INTERNOS
+// INTERNAL TYPES
 // ============================================================================
 
 type Pid
 
 // ============================================================================
-// API PÚBLICA - O DIFERENCIAL!
+// PUBLIC API - THE DIFFERENTIATOR!
 // ============================================================================
 
-/// Processa uma lista de tensores em paralelo
+/// Processes a list of tensors in parallel
 ///
-/// Cada tensor é processado em um processo BEAM separado.
-/// Em C/C++ isso precisaria de pthread_create + mutex para cada tensor.
-/// Em Gleam: uma linha de código e zero data races!
+/// Each tensor is processed in a separate BEAM process.
+/// In C/C++ this would require pthread_create + mutex for each tensor.
+/// In Gleam: one line of code and zero data races!
 pub fn parallel_map(tensors: List(Tensor), op: TensorOp) -> List(Tensor) {
   let parent = erlang_self()
   let indexed = list.index_map(tensors, fn(t, idx) { #(idx, t) })
 
-  // Spawna um processo leve para cada tensor (~2KB cada)
+  // Spawns a lightweight process for each tensor (~2KB each)
   list.each(indexed, fn(pair) {
     let #(idx, t) = pair
     erlang_spawn(fn() {
@@ -65,7 +65,7 @@ pub fn parallel_map(tensors: List(Tensor), op: TensorOp) -> List(Tensor) {
     })
   })
 
-  // Coleta e ordena resultados
+  // Collect and sort results
   collect_indexed(list.length(tensors))
   |> list.sort(fn(a, b) {
     let #(idx_a, _) = a
@@ -78,10 +78,10 @@ pub fn parallel_map(tensors: List(Tensor), op: TensorOp) -> List(Tensor) {
   })
 }
 
-/// Busca de similaridade em batch - O KILLER FEATURE!
+/// Batch similarity search - THE KILLER FEATURE!
 ///
-/// Compara uma query contra milhares de documentos em paralelo.
-/// Retorna os resultados ordenados por similaridade (desc).
+/// Compares a query against thousands of documents in parallel.
+/// Returns results sorted by similarity (desc).
 pub fn similarity_search(
   query: Tensor,
   documents: List(Tensor),
@@ -91,7 +91,7 @@ pub fn similarity_search(
   let chunks = list.sized_chunk(documents, chunk_size)
   let num_chunks = list.length(chunks)
 
-  // Cada chunk é processado em paralelo
+  // Each chunk is processed in parallel
   list.index_map(chunks, fn(chunk, chunk_idx) {
     erlang_spawn(fn() {
       let start_idx = chunk_idx * chunk_size
@@ -107,7 +107,7 @@ pub fn similarity_search(
     })
   })
 
-  // Coleta, flatten e ordena por similaridade
+  // Collect, flatten and sort by similarity
   collect_n_chunks(num_chunks)
   |> list.flat_map(fn(pair) {
     let #(_, results) = pair
@@ -119,7 +119,7 @@ pub fn similarity_search(
   })
 }
 
-/// Top-K similarity - retorna os K mais similares
+/// Top-K similarity - returns the K most similar
 pub fn top_k_similar(
   query: Tensor,
   documents: List(Tensor),
@@ -129,7 +129,7 @@ pub fn top_k_similar(
   |> list.take(k)
 }
 
-/// Soma paralela de todos os tensores
+/// Parallel sum of all tensors
 pub fn parallel_sum(tensors: List(Tensor)) -> Float {
   let parent = erlang_self()
   let chunks = list.sized_chunk(tensors, 100)
@@ -146,7 +146,7 @@ pub fn parallel_sum(tensors: List(Tensor)) -> Float {
 }
 
 // ============================================================================
-// BENCHMARK - MOSTRA O PODER!
+// BENCHMARK - SHOW THE POWER!
 // ============================================================================
 
 pub fn main() {
@@ -158,19 +158,19 @@ pub fn benchmark_pool() {
     "╔══════════════════════════════════════════════════════════════════╗",
   )
   io.println(
-    "║  TensorPool - Distributed Tensor Computing em Pure Gleam!       ║",
+    "║  TensorPool - Distributed Tensor Computing in Pure Gleam!       ║",
   )
   io.println(
-    "║  Algo que C/C++ NÃO consegue fazer com essa simplicidade!       ║",
+    "║  Something C/C++ CANNOT do with this simplicity!                ║",
   )
   io.println(
     "╚══════════════════════════════════════════════════════════════════╝\n",
   )
 
-  io.println("CONCEITO: GenServer + GPU")
-  io.println("  - GenServer gerencia estado e load balancing")
-  io.println("  - Workers são processos BEAM leves (~2KB cada)")
-  io.println("  - NIFs chamam cuBLAS/cuDNN para GPU compute")
+  io.println("CONCEPT: GenServer + GPU")
+  io.println("  - GenServer manages state and load balancing")
+  io.println("  - Workers are lightweight BEAM processes (~2KB each)")
+  io.println("  - NIFs call cuBLAS/cuDNN for GPU compute")
   io.println("  - Zero data races, fault tolerant by design!\n")
 
   // Test 1: Parallel Map
@@ -227,31 +227,31 @@ pub fn benchmark_pool() {
     "\n╔══════════════════════════════════════════════════════════════════╗",
   )
   io.println(
-    "║  COMO ISSO RODA NA GPU:                                         ║",
+    "║  HOW THIS RUNS ON THE GPU:                                      ║",
   )
   io.println(
     "║                                                                  ║",
   )
   io.println(
-    "║  1. GenServer recebe request de tensor op                       ║",
+    "║  1. GenServer receives tensor op request                        ║",
   )
   io.println(
-    "║  2. Spawna Worker (processo BEAM ~2KB)                          ║",
+    "║  2. Spawns Worker (BEAM process ~2KB)                           ║",
   )
   io.println(
-    "║  3. Worker chama NIF (Rust/C) que acessa GPU                    ║",
+    "║  3. Worker calls NIF (Rust/C) that accesses GPU                 ║",
   )
   io.println(
-    "║  4. NIF usa cuBLAS para matmul, cuDNN para conv                 ║",
+    "║  4. NIF uses cuBLAS for matmul, cuDNN for conv                  ║",
   )
   io.println(
-    "║  5. Resultado volta pro Worker, depois pro GenServer            ║",
+    "║  5. Result returns to Worker, then to GenServer                 ║",
   )
   io.println(
     "║                                                                  ║",
   )
   io.println(
-    "║  Vantagem: milhares de ops em paralelo, fault tolerant!         ║",
+    "║  Advantage: thousands of ops in parallel, fault tolerant!       ║",
   )
   io.println(
     "╚══════════════════════════════════════════════════════════════════╝",
@@ -259,7 +259,7 @@ pub fn benchmark_pool() {
 }
 
 // ============================================================================
-// FUNÇÕES INTERNAS
+// INTERNAL FUNCTIONS
 // ============================================================================
 
 fn apply_op(t: Tensor, op: TensorOp) -> Tensor {

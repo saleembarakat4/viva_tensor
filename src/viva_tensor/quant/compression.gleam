@@ -31,7 +31,7 @@ import viva_tensor/tensor.{type Tensor, Tensor}
 
 // --- Quantization Formats ---
 
-/// Formato de quantização
+/// Quantization format
 pub type QuantFormat {
   /// Full precision (32 bits, 4 bytes per value)
   /// Memory: 4 bytes/param | Compression: 1x
