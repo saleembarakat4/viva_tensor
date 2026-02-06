@@ -4,9 +4,11 @@ import gleam/int
 import gleam/io
 import gleam/list
 import gleam/result
-import viva_tensor/autograd.{type Tape, Traced}
-import viva_tensor/nn
-import viva_tensor/tensor
+import viva_tensor/nn/autograd.{type Tape, Traced}
+import viva_tensor/nn/layers as nn
+import viva_tensor/core/tensor
+import viva_tensor/core/shape
+import viva_tensor/core/ops
 
 // Training Configuration
 const learning_rate = 0.01
@@ -31,10 +33,10 @@ pub fn main() {
 
   // Reshape to [5, 1] (5 samples, 1 feature)
   let x_data = tensor.from_list([1.0, 2.0, 3.0, 4.0, 5.0])
-  let assert Ok(x_data) = tensor.reshape(x_data, [5, 1])
+  let assert Ok(x_data) = shape.reshape(x_data, [5, 1])
 
   let y_data = tensor.from_list([2.1, 3.9, 6.2, 8.1, 10.3])
-  let assert Ok(y_data) = tensor.reshape(y_data, [5, 1])
+  let assert Ok(y_data) = shape.reshape(y_data, [5, 1])
 
   let Traced(_x, tape1) = autograd.new_variable(tape, x_data)
   let Traced(_y, tape2) = autograd.new_variable(tape1, y_data)
@@ -96,16 +98,16 @@ fn train_step(
   let assert Ok(gw1) = dict.get(grads, state.layer1.w.id)
   let assert Ok(gb1) = dict.get(grads, state.layer1.b.id)
   let assert Ok(new_w1_data) =
-    tensor.sub(state.layer1.w.data, tensor.scale(gw1, learning_rate))
+    ops.sub(state.layer1.w.data, ops.scale(gw1, learning_rate))
   let assert Ok(new_b1_data) =
-    tensor.sub(state.layer1.b.data, tensor.scale(gb1, learning_rate))
+    ops.sub(state.layer1.b.data, ops.scale(gb1, learning_rate))
 
   let assert Ok(gw2) = dict.get(grads, state.layer2.w.id)
   let assert Ok(gb2) = dict.get(grads, state.layer2.b.id)
   let assert Ok(new_w2_data) =
-    tensor.sub(state.layer2.w.data, tensor.scale(gw2, learning_rate))
+    ops.sub(state.layer2.w.data, ops.scale(gw2, learning_rate))
   let assert Ok(new_b2_data) =
-    tensor.sub(state.layer2.b.data, tensor.scale(gb2, learning_rate))
+    ops.sub(state.layer2.b.data, ops.scale(gb2, learning_rate))
 
   // New tape for next iteration
   let next_tape = autograd.new_tape()

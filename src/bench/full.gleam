@@ -9,10 +9,10 @@ import gleam/io
 import gleam/list
 import gleam/string
 
-import viva_tensor/awq
-import viva_tensor/compression
+import viva_tensor/quant/awq
+import viva_tensor/quant/compression
 import viva_tensor/metrics
-import viva_tensor/nf4
+import viva_tensor/quant/nf4
 import viva_tensor/tensor.{type Tensor}
 
 // ============================================================================
