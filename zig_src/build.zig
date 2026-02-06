@@ -57,11 +57,15 @@ pub fn build(b: *std.Build) void {
         lib.addLibraryPath(.{ .cwd_relative = mkl_lib });
         lib.linkSystemLibrary("mkl_rt");
     } else {
-        // OpenBLAS 0.3.31 (DYNAMIC_ARCH) on Unix
-        lib.addLibraryPath(.{ .cwd_relative = "../deps/openblas/lib" });
-        lib.addIncludePath(.{ .cwd_relative = "../deps/openblas/include" });
+        // Linux: Dynamic BLAS backend selection at runtime via dlopen
+        // Priority: Intel MKL > OpenBLAS-tuned > OpenBLAS system > Zig GEMM fallback
+        // Link with dl for dlopen/dlsym (dynamic loading)
+        lib.linkSystemLibrary("dl");
+
+        // Also link with system OpenBLAS as fallback (loaded at NIF startup if available)
+        lib.addLibraryPath(.{ .cwd_relative = "/usr/lib/x86_64-linux-gnu/openblas-pthread/" });
+        lib.addIncludePath(.{ .cwd_relative = "/usr/include/x86_64-linux-gnu/openblas-pthread/" });
         lib.linkSystemLibrary("openblas");
-        lib.addRPath(.{ .cwd_relative = "../deps/openblas/lib" });
     }
 
     // Install the library

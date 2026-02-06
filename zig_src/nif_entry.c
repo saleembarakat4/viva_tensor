@@ -33,11 +33,158 @@
 #include <intrin.h>
 /* Intel MKL for optimized GEMM on Windows (600+ GFLOPS) */
 #include <mkl_cblas.h>
+#define BLAS_BACKEND_MKL 1
+#define BLAS_BACKEND_NAME "Intel MKL"
 #else
 #include <sched.h>
 #include <pthread.h>
 #include <unistd.h>
-#include <cblas.h>  /* OpenBLAS for optimized GEMM */
+#include <dlfcn.h>  /* Dynamic loading for runtime backend selection */
+
+/* =========================================================================
+ * Dynamic BLAS Backend Selection (MKL > OpenBLAS-tuned > OpenBLAS)
+ * ========================================================================= */
+
+typedef enum {
+  BLAS_MKL = 1,
+  BLAS_OPENBLAS_TUNED = 2,
+  BLAS_OPENBLAS = 3,
+  BLAS_ZIG_GEMM = 4
+} BlasBackend;
+
+/* Function pointer type for cblas_dgemm
+ * cblas_dgemm(Order, TransA, TransB, M, N, K, alpha, A, lda, B, ldb, beta, C, ldc)
+ * CBLAS_ORDER: CblasRowMajor=101, CblasColMajor=102
+ * CBLAS_TRANSPOSE: CblasNoTrans=111, CblasTrans=112, CblasConjTrans=113
+ */
+typedef void (*dgemm_fn)(const int Order, const int TransA, const int TransB,
+                         const int M, const int N, const int K,
+                         const double alpha, const double *A, const int lda,
+                         const double *B, const int ldb,
+                         const double beta, double *C, const int ldc);
+
+/* Function pointer type for openblas_set_num_threads */
+typedef void (*set_threads_fn)(int);
+
+/* Global BLAS state */
+static BlasBackend g_blas_backend = BLAS_ZIG_GEMM;
+static void *g_blas_handle = NULL;
+static dgemm_fn g_dgemm = NULL;
+static set_threads_fn g_set_threads = NULL;
+static const char *g_blas_name = "Zig GEMM";
+static int g_blas_detected = 0;
+
+/* Try to load a BLAS library dynamically */
+static int try_load_blas(const char *libname, const char *backend_name, BlasBackend backend_type) {
+  void *handle = dlopen(libname, RTLD_NOW | RTLD_LOCAL);
+  if (!handle) {
+    /* Debug: show why load failed */
+    /* fprintf(stderr, "[viva_tensor] dlopen(%s) failed: %s\n", libname, dlerror()); */
+    return 0;
+  }
+
+  dgemm_fn dgemm = (dgemm_fn)dlsym(handle, "cblas_dgemm");
+  if (!dgemm) {
+    dlclose(handle);
+    return 0;
+  }
+
+  g_blas_handle = handle;
+  g_dgemm = dgemm;
+  g_blas_backend = backend_type;
+  g_blas_name = backend_name;
+
+  /* Try to get thread control function */
+  if (backend_type == BLAS_MKL) {
+    g_set_threads = (set_threads_fn)dlsym(handle, "mkl_set_num_threads");
+  } else {
+    g_set_threads = (set_threads_fn)dlsym(handle, "openblas_set_num_threads");
+  }
+
+  /* Auto-configure optimal thread count (16 is good default for modern CPUs) */
+  if (g_set_threads) {
+    int ncpus = sysconf(_SC_NPROCESSORS_ONLN);
+    int optimal = ncpus > 0 ? ncpus : 16;
+    g_set_threads(optimal);
+    fprintf(stderr, "[viva_tensor] BLAS threads: %d\n", optimal);
+  }
+
+  return 1;
+}
+
+/* Detect and load the best available BLAS backend */
+static void detect_blas_backend(void) {
+  if (g_blas_detected) return;
+  g_blas_detected = 1;
+
+  /* Priority: Intel MKL > OpenBLAS-tuned > OpenBLAS system > Zig GEMM */
+
+  /* 1. Try Intel MKL first (800+ GFLOPS on Linux!) */
+  if (try_load_blas("libmkl_rt.so", "Intel MKL", BLAS_MKL)) {
+    fprintf(stderr, "[viva_tensor] Backend: Intel MKL (800+ GFLOPS)\n");
+    return;
+  }
+  /* Try alternate MKL paths */
+  if (try_load_blas("/usr/lib/x86_64-linux-gnu/libmkl_rt.so", "Intel MKL", BLAS_MKL)) {
+    fprintf(stderr, "[viva_tensor] Backend: Intel MKL (800+ GFLOPS)\n");
+    return;
+  }
+  if (try_load_blas("/opt/intel/mkl/lib/intel64/libmkl_rt.so", "Intel MKL", BLAS_MKL)) {
+    fprintf(stderr, "[viva_tensor] Backend: Intel MKL (800+ GFLOPS)\n");
+    return;
+  }
+  if (try_load_blas("/opt/intel/oneapi/mkl/latest/lib/intel64/libmkl_rt.so", "Intel MKL", BLAS_MKL)) {
+    fprintf(stderr, "[viva_tensor] Backend: Intel MKL (800+ GFLOPS)\n");
+    return;
+  }
+
+  /* 2. Try our tuned OpenBLAS (HASWELL-optimized, 500+ GFLOPS) */
+  char tuned_path[512];
+  if (getcwd(tuned_path, sizeof(tuned_path) - 100)) {
+    strcat(tuned_path, "/deps/openblas-tuned/lib/libopenblas.so");
+  } else {
+    strcpy(tuned_path, "deps/openblas-tuned/lib/libopenblas.so");
+  }
+  if (try_load_blas(tuned_path, "OpenBLAS-HASWELL", BLAS_OPENBLAS_TUNED)) {
+    fprintf(stderr, "[viva_tensor] Backend: OpenBLAS-HASWELL (tuned, 500+ GFLOPS)\n");
+    return;
+  }
+
+  /* 3. Try system OpenBLAS as fallback */
+  if (try_load_blas("libopenblas.so.0", "OpenBLAS", BLAS_OPENBLAS)) {
+    fprintf(stderr, "[viva_tensor] Backend: OpenBLAS system\n");
+    return;
+  }
+  if (try_load_blas("libopenblas.so", "OpenBLAS", BLAS_OPENBLAS)) {
+    fprintf(stderr, "[viva_tensor] Backend: OpenBLAS system\n");
+    return;
+  }
+
+  /* 4. Fallback to Zig GEMM (still good: 200+ GFLOPS) */
+  fprintf(stderr, "[viva_tensor] Backend: Zig GEMM (native, 200+ GFLOPS)\n");
+}
+
+/* Call cblas_dgemm via the loaded backend
+ * Row-major: lda=K, ldb=N, ldc=N for C = A @ B where A is MxK, B is KxN
+ */
+static void blas_dgemm(int M, int N, int K, double alpha,
+                       const double *A, int lda,
+                       const double *B, int ldb,
+                       double beta, double *C, int ldc) {
+  if (g_dgemm) {
+    /* CblasRowMajor=101, CblasNoTrans=111 */
+    g_dgemm(101, 111, 111, M, N, K, alpha, A, lda, B, ldb, beta, C, ldc);
+  }
+}
+
+/* Set number of threads for BLAS operations */
+static void blas_set_threads(int n) {
+  if (g_set_threads) {
+    g_set_threads(n);
+  }
+}
+
+#define BLAS_BACKEND_NAME g_blas_name
 #endif
 
 /* =========================================================================
@@ -973,6 +1120,7 @@ static ERL_NIF_TERM nt_matmul(ErlNifEnv *env, int argc,
 
 /** nt_matmul_blas(RefA, RefB, M, N, K) -> {ok, RefC}
  *  Uses Intel MKL (Windows) or OpenBLAS (Unix) for optimized GEMM (600+ GFLOPS)
+ *  On Linux: dynamically selects best available backend at runtime
  */
 static ERL_NIF_TERM nt_matmul_blas(ErlNifEnv *env, int argc,
                                    const ERL_NIF_TERM argv[]) {
@@ -1001,11 +1149,25 @@ static ERL_NIF_TERM nt_matmul_blas(ErlNifEnv *env, int argc,
    * cblas_dgemm(order, transA, transB, m, n, k, alpha, A, lda, B, ldb, beta, C, ldc)
    * Row-major: lda=k, ldb=n, ldc=n
    */
+#ifdef _WIN32
+  /* Windows: directly use MKL */
   cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
               (int)m, (int)n, (int)k,
               1.0, a->data, (int)k,
               b->data, (int)n,
               0.0, c->data, (int)n);
+#else
+  /* Linux: use dynamically loaded backend */
+  if (g_dgemm) {
+    blas_dgemm((int)m, (int)n, (int)k,
+               1.0, a->data, (int)k,
+               b->data, (int)n,
+               0.0, c->data, (int)n);
+  } else {
+    /* Fallback to Zig GEMM if no BLAS available */
+    vt_simd_matmul(a->data, b->data, c->data, m, n, k);
+  }
+#endif
 
   return make_ok(env, make_tensor_term(env, c));
 }
@@ -2043,9 +2205,15 @@ static ERL_NIF_TERM nif_backend_info(ErlNifEnv *env, int argc,
                                      const ERL_NIF_TERM argv[]) {
   (void)argc;
   (void)argv;
-  char info[256];
+  char info[512];
+#ifdef _WIN32
+  const char *blas_name = "Intel MKL";
+#else
+  const char *blas_name = g_blas_name ? g_blas_name : "Zig GEMM";
+#endif
   snprintf(info, sizeof(info),
-           "Zig SIMD (Vec8 f64) | %d cores (%d logical) | L2:%dKB L3:%dKB | %s%s| %d threads",
+           "%s + Zig SIMD (Vec8 f64) | %d cores (%d logical) | L2:%dKB L3:%dKB | %s%s| %d threads",
+           blas_name,
            g_cpu_info.physical_cores,
            g_cpu_info.logical_cpus,
            g_cpu_info.l2_cache_kb,
@@ -2123,6 +2291,16 @@ static int nif_load(ErlNifEnv *env, void **priv, ERL_NIF_TERM info) {
 
   /* Detect CPU topology once at NIF load (MKL-style runtime init) */
   detect_cpu_topology();
+
+#ifndef _WIN32
+  /* Linux: detect best BLAS backend (MKL > OpenBLAS-tuned > OpenBLAS > Zig) */
+  detect_blas_backend();
+
+  /* Auto-tune thread count based on matrix size heuristics */
+  if (g_set_threads && g_cpu_info.optimal_threads > 0) {
+    blas_set_threads(g_cpu_info.optimal_threads);
+  }
+#endif
 
   TENSOR_RESOURCE = enif_open_resource_type(
       env, NULL, "NativeTensor", tensor_destructor, ERL_NIF_RT_CREATE, NULL);

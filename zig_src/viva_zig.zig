@@ -640,22 +640,18 @@ fn pack_a(a: [*]const f64, dst_buf: [*]f64, mc_len: usize, kc_len: usize, lda: u
 /// Pack B panel: B[pc:pc+kc, jc:jc+nc] -> packed_b in NR-wide row panels
 /// Layout: micro-panel 0 (kcxNR), micro-panel 1 (kcxNR), ...
 /// Within each micro-panel: NR contiguous elements per k-step
-/// Prefetches next row to hide memory latency during packing.
+/// SIMD-optimized: loads 8 contiguous doubles with Vec8 (AVX-512/AVX2)
 fn pack_b(b: [*]const f64, dst_buf: [*]f64, kc_len: usize, nc_len: usize, ldb: usize, pc: usize, jc: usize) void {
     var p: usize = 0;
-    // Full NR-wide panels
+    // Full NR-wide panels (NR=8 = Vec size for SIMD load/store)
     while (p + NR <= nc_len) : (p += NR) {
         var kk: usize = 0;
         while (kk < kc_len) : (kk += 1) {
-            // Prefetch next row of B (sequential access)
-            if (kk + 4 < kc_len) {
-                @prefetch(b + (pc + kk + 4) * ldb + (jc + p), .{ .rw = .read, .locality = 1, .cache = .data });
-            }
+            const src = b + (pc + kk) * ldb + (jc + p);
             const dst = dst_buf + (p / NR) * NR * kc_len + kk * NR;
-            comptime var c_col: usize = 0;
-            inline while (c_col < NR) : (c_col += 1) {
-                dst[c_col] = b[(pc + kk) * ldb + (jc + p + c_col)];
-            }
+            // SIMD vector load/store for 8 contiguous elements
+            const v: Vec = src[0..VEC_LEN].*;
+            dst[0..VEC_LEN].* = v;
         }
     }
     // Remainder cols (< NR): pad with zeros
@@ -742,13 +738,27 @@ fn gemm_worker(ctx: *const GemmWorkerCtx) void {
 }
 
 /// Goto-style 5-loop GEMM: C[m,n] += A[m,k] x B[k,n]
+/// Get optimal thread count for GEMM workload
+/// - Uses physical cores (not HT) for best cache utilization
+/// - Limits to available work (ic tiles)
+fn get_gemm_threads(m: usize) usize {
+    const n_ic_tiles = (m + MC - 1) / MC;
+    // On most systems, using physical cores (half of logical) is optimal for compute-bound work
+    // HyperThreading causes cache contention in GEMM
+    const logical = Thread.getCpuCount() catch 1;
+    const physical = @max(logical / 2, 1); // Approximate physical cores
+    const optimal = if (m >= 256) physical else if (m >= 100) @max(physical / 2, 4) else 1;
+    return @min(@min(MAX_THREADS, n_ic_tiles), optimal);
+}
+
+/// Goto-style 5-loop GEMM: C[m,n] += A[m,k] x B[k,n]
 /// Multi-threaded: parallelizes the ic (row-tile) loop across CPU cores.
 /// C must be pre-zeroed by caller.
 fn goto_gemm(a: [*]const f64, b: [*]const f64, c: [*]f64, m: usize, n: usize, k: usize) void {
-    // Determine thread count based on available work
+    // Determine thread count based on available work and physical cores
     const n_ic_tiles = (m + MC - 1) / MC;
-    const hw_threads = if (m >= 256) (Thread.getCpuCount() catch 1) else 1;
-    const n_threads = @min(@min(MAX_THREADS, n_ic_tiles), @max(hw_threads, 1));
+    _ = n_ic_tiles; // used in get_gemm_threads
+    const n_threads = get_gemm_threads(m);
 
     // Allocate padded packing buffers (padding required by MR/NR zero-fill in pack_a/pack_b)
     const max_kc = @min(KC, k);
