@@ -435,18 +435,29 @@ fn simd_free(ptr: ?[*]u8) void {
 // Goto GEMM constants (BLIS Haswell dgemm config, tuned for Raptor Lake)
 const MR: usize = 6; // Micro-kernel rows (matches AVX2 dgemm_6x8)
 const NR: usize = 8; // Micro-kernel cols (2 x Vec4 = 8 doubles)
-const KC: usize = 256; // K-block: NRxKCx8 = 16KB fits L1 (48KB)
-const MC: usize = 144; // M-block: MCxKCx8 = 288KB fits L2 (2MB on Raptor Lake)
-const NC: usize = 4080; // N-block: KCxNCx8 = 8MB fits L3 (30MB)
+const KC: usize = 384; // K-block: NRxKCx8 = 24KB fits L1 (48KB on Raptor Lake P-core)
+const MC: usize = 144; // M-block: MCxKCx8 = 432KB fits L2 - balanced parallelism
+const NC: usize = 4096; // N-block: KCxNCx8 = 12MB fits L3 (36MB on i9-13900K)
 
 // Vec4 maps directly to AVX2 YMM register (256-bit = 4 x f64)
 const Vec4 = @Vector(4, f64);
 
 /// 6x8 micro-kernel: C[6x8] += packed_A[6xkc] x packed_B[kcx8]
-/// This is the innermost hot loop. 12 FMAs per k-step.
-/// packed_a: MR contiguous doubles per k-step
-/// packed_b: NR contiguous doubles per k-step
+/// BLIS-style optimizations:
+/// - Prefetch C rows before loop (hide store latency)
+/// - Prefetch A/B every 2 iterations (hide load latency)
+/// - Pre-load B vectors before main loop
+/// - K-unrolled by 4 for FMA pipeline saturation
+/// - 12 independent accumulator chains (FMA latency=4, 2 ports = 8 needed)
 fn micro_6x8(packed_a: [*]const f64, packed_b: [*]const f64, c_ptr: [*]f64, ldc: usize, kc_len: usize) void {
+    // Prefetch all 6 rows of C before computation (BLIS-style)
+    @prefetch(c_ptr, .{ .rw = .write, .locality = 3, .cache = .data });
+    @prefetch(c_ptr + ldc, .{ .rw = .write, .locality = 3, .cache = .data });
+    @prefetch(c_ptr + 2 * ldc, .{ .rw = .write, .locality = 3, .cache = .data });
+    @prefetch(c_ptr + 3 * ldc, .{ .rw = .write, .locality = 3, .cache = .data });
+    @prefetch(c_ptr + 4 * ldc, .{ .rw = .write, .locality = 3, .cache = .data });
+    @prefetch(c_ptr + 5 * ldc, .{ .rw = .write, .locality = 3, .cache = .data });
+
     // 12 accumulator vectors: 6 rows x 2 halves (lo=cols 0..3, hi=cols 4..7)
     var c0_lo: Vec4 = @splat(0.0);
     var c0_hi: Vec4 = @splat(0.0);
@@ -461,10 +472,13 @@ fn micro_6x8(packed_a: [*]const f64, packed_b: [*]const f64, c_ptr: [*]f64, ldc:
     var c5_lo: Vec4 = @splat(0.0);
     var c5_hi: Vec4 = @splat(0.0);
 
+    // Pre-load first B vectors (BLIS pattern)
+    var b_lo: Vec4 = packed_b[0..4].*;
+    var b_hi: Vec4 = packed_b[4..8].*;
+
     var kk: usize = 0;
 
     // K-unrolled by 4 for FMA pipeline saturation
-    // FMA latency = 4 cycles, 2 ports -> need 8+ independent chains. We have 12.
     while (kk + 4 <= kc_len) : (kk += 4) {
         // Unroll 4 k-iterations at compile time
         comptime var u: usize = 0;
@@ -472,9 +486,14 @@ fn micro_6x8(packed_a: [*]const f64, packed_b: [*]const f64, c_ptr: [*]f64, ldc:
             const a_off = (kk + u) * MR;
             const b_off = (kk + u) * NR;
 
-            // Load B vector (8 doubles = 2 x Vec4)
-            const b_lo: Vec4 = packed_b[b_off..][0..4].*;
-            const b_hi: Vec4 = packed_b[b_off + 4 ..][0..4].*;
+            // Prefetch every 2 iterations (BLIS pattern)
+            if (u == 0 or u == 2) {
+                const pf_dist = 8;
+                if (kk + u + pf_dist < kc_len) {
+                    @prefetch(packed_a + (kk + u + pf_dist) * MR, .{ .rw = .read, .locality = 3, .cache = .data });
+                    @prefetch(packed_b + (kk + u + pf_dist) * NR, .{ .rw = .read, .locality = 3, .cache = .data });
+                }
+            }
 
             // Broadcast each A element and FMA into accumulators
             const a0: Vec4 = @splat(packed_a[a_off + 0]);
@@ -500,6 +519,13 @@ fn micro_6x8(packed_a: [*]const f64, packed_b: [*]const f64, c_ptr: [*]f64, ldc:
             const a5: Vec4 = @splat(packed_a[a_off + 5]);
             c5_lo = @mulAdd(Vec4, a5, b_lo, c5_lo);
             c5_hi = @mulAdd(Vec4, a5, b_hi, c5_hi);
+
+            // Load next B vectors (overlapped with FMA)
+            if (u < 3 or kk + 4 < kc_len) {
+                const next_b = if (u < 3) b_off + NR else (kk + 4) * NR;
+                b_lo = packed_b[next_b..][0..4].*;
+                b_hi = packed_b[next_b + 4 ..][0..4].*;
+            }
         }
     }
 
@@ -508,8 +534,8 @@ fn micro_6x8(packed_a: [*]const f64, packed_b: [*]const f64, c_ptr: [*]f64, ldc:
         const a_off = kk * MR;
         const b_off = kk * NR;
 
-        const b_lo: Vec4 = packed_b[b_off..][0..4].*;
-        const b_hi: Vec4 = packed_b[b_off + 4 ..][0..4].*;
+        b_lo = packed_b[b_off..][0..4].*;
+        b_hi = packed_b[b_off + 4 ..][0..4].*;
 
         const a0: Vec4 = @splat(packed_a[a_off + 0]);
         c0_lo = @mulAdd(Vec4, a0, b_lo, c0_lo);
@@ -532,7 +558,6 @@ fn micro_6x8(packed_a: [*]const f64, packed_b: [*]const f64, c_ptr: [*]f64, ldc:
     }
 
     // Store: C[tile] += accumulators
-    // Each row: load existing C, add accumulator, store back
     const c0 = c_ptr;
     c0[0..4].* = c0[0..4].* + c0_lo;
     c0[4..8].* = c0[4..8].* + c0_hi;
@@ -573,12 +598,20 @@ fn micro_edge(packed_a: [*]const f64, packed_b: [*]const f64, c_ptr: [*]f64, ldc
 /// Pack A panel: A[ic:ic+mc, pc:pc+kc] -> packed_a in MR-wide column panels
 /// Layout: micro-panel 0 (MRxkc), micro-panel 1 (MRxkc), ...
 /// Within each micro-panel: MR contiguous elements per k-step
+/// Prefetches next rows to hide memory latency during packing.
 fn pack_a(a: [*]const f64, dst_buf: [*]f64, mc_len: usize, kc_len: usize, lda: usize, ic: usize, pc: usize) void {
     var p: usize = 0;
     // Full MR-wide panels
     while (p + MR <= mc_len) : (p += MR) {
         var kk: usize = 0;
         while (kk < kc_len) : (kk += 1) {
+            // Prefetch next k-column for each row in current panel
+            if (kk + 8 < kc_len) {
+                comptime var r: usize = 0;
+                inline while (r < MR) : (r += 1) {
+                    @prefetch(a + (ic + p + r) * lda + (pc + kk + 8), .{ .rw = .read, .locality = 1, .cache = .data });
+                }
+            }
             const dst = dst_buf + (p / MR) * MR * kc_len + kk * MR;
             comptime var r: usize = 0;
             inline while (r < MR) : (r += 1) {
@@ -607,12 +640,17 @@ fn pack_a(a: [*]const f64, dst_buf: [*]f64, mc_len: usize, kc_len: usize, lda: u
 /// Pack B panel: B[pc:pc+kc, jc:jc+nc] -> packed_b in NR-wide row panels
 /// Layout: micro-panel 0 (kcxNR), micro-panel 1 (kcxNR), ...
 /// Within each micro-panel: NR contiguous elements per k-step
+/// Prefetches next row to hide memory latency during packing.
 fn pack_b(b: [*]const f64, dst_buf: [*]f64, kc_len: usize, nc_len: usize, ldb: usize, pc: usize, jc: usize) void {
     var p: usize = 0;
     // Full NR-wide panels
     while (p + NR <= nc_len) : (p += NR) {
         var kk: usize = 0;
         while (kk < kc_len) : (kk += 1) {
+            // Prefetch next row of B (sequential access)
+            if (kk + 4 < kc_len) {
+                @prefetch(b + (pc + kk + 4) * ldb + (jc + p), .{ .rw = .read, .locality = 1, .cache = .data });
+            }
             const dst = dst_buf + (p / NR) * NR * kc_len + kk * NR;
             comptime var c_col: usize = 0;
             inline while (c_col < NR) : (c_col += 1) {
@@ -645,7 +683,7 @@ fn pack_b(b: [*]const f64, dst_buf: [*]f64, kc_len: usize, nc_len: usize, ldb: u
 const std = @import("std");
 const Thread = std.Thread;
 
-const MAX_THREADS: usize = 8;
+const MAX_THREADS: usize = 32; // Support up to 32 threads for HT systems
 
 /// Compute padded buffer size for pack_a: ceil(mc/MR)*MR * kc
 inline fn pack_a_size(mc: usize, kc: usize) usize {

@@ -320,6 +320,10 @@ static ERL_NIF_TERM make_ok(ErlNifEnv *env, ERL_NIF_TERM value) {
   return enif_make_tuple2(env, enif_make_atom(env, "ok"), value);
 }
 
+static ERL_NIF_TERM make_ok_nil(ErlNifEnv *env) {
+  return enif_make_tuple2(env, enif_make_atom(env, "ok"), enif_make_atom(env, "nil"));
+}
+
 static ERL_NIF_TERM make_error(ErlNifEnv *env, const char *reason) {
   return enif_make_tuple2(env, enif_make_atom(env, "error"),
                           enif_make_atom(env, reason));
@@ -1210,7 +1214,7 @@ static ERL_NIF_TERM horde_set_positions(ErlNifEnv *env, int argc,
 
   memcpy(h->positions, data, len * sizeof(double));
   free(data);
-  return enif_make_atom(env, "ok");
+  return make_ok_nil(env);
 }
 
 /** horde_set_velocities(HordeRef, DataList) -> ok */
@@ -1234,7 +1238,7 @@ static ERL_NIF_TERM horde_set_velocities(ErlNifEnv *env, int argc,
 
   memcpy(h->velocities, data, len * sizeof(double));
   free(data);
-  return enif_make_atom(env, "ok");
+  return make_ok_nil(env);
 }
 
 /** horde_integrate(HordeRef, Dt) -> ok
@@ -1252,7 +1256,7 @@ static ERL_NIF_TERM horde_integrate_nif(ErlNifEnv *env, int argc,
 
   vt_horde_integrate(h->positions, h->velocities, dt,
                      h->entity_count * h->dims);
-  return enif_make_atom(env, "ok");
+  return make_ok_nil(env);
 }
 
 /** horde_dampen(HordeRef, Friction) -> ok */
@@ -1268,7 +1272,7 @@ static ERL_NIF_TERM horde_dampen_nif(ErlNifEnv *env, int argc,
     return make_error(env, "invalid_friction");
 
   vt_horde_dampen(h->velocities, friction, h->entity_count * h->dims);
-  return enif_make_atom(env, "ok");
+  return make_ok_nil(env);
 }
 
 /** horde_wrap(HordeRef, MaxBound) -> ok
@@ -1285,7 +1289,7 @@ static ERL_NIF_TERM horde_wrap_nif(ErlNifEnv *env, int argc,
     return make_error(env, "invalid_bound");
 
   vt_horde_wrap(h->positions, max_bound, h->entity_count * h->dims);
-  return enif_make_atom(env, "ok");
+  return make_ok_nil(env);
 }
 
 /** horde_get_positions(HordeRef) -> {ok, List} */
