@@ -22,9 +22,7 @@ pub fn main() {
     "╚══════════════════════════════════════════════════════════════════╝\n",
   )
 
-  io.println(
-    "C/C++ libs (Eigen, OpenBLAS, MKL) are fast in single-thread...",
-  )
+  io.println("C/C++ libs (Eigen, OpenBLAS, MKL) are fast in single-thread...")
   io.println("But how many tensors can you process in PARALLEL? 🤔\n")
 
   // Test 1: Parallel tensor creation
@@ -224,9 +222,7 @@ fn bench_process_spawning() {
   })
 
   io.println("")
-  io.println(
-    "  💡 In C/C++ you would need pthreads, mutex, condition vars...",
-  )
+  io.println("  💡 In C/C++ you would need pthreads, mutex, condition vars...")
   io.println(
     "  💡 In Gleam: erlang_spawn() and done! Zero data races guaranteed.",
   )

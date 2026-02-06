@@ -138,10 +138,7 @@ fn prune_group_magnitude(group: List(Float)) -> Sparse24Block {
     })
 
   // Sort descending by magnitude - largest first
-  let sorted =
-    list.sort(indexed, fn(a, b) {
-      float.compare(b.2, a.2)
-    })
+  let sorted = list.sort(indexed, fn(a, b) { float.compare(b.2, a.2) })
 
   // Take the top 2 survivors
   case sorted {

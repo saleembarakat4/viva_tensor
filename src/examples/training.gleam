@@ -4,11 +4,11 @@ import gleam/int
 import gleam/io
 import gleam/list
 import gleam/result
+import viva_tensor/core/ops
+import viva_tensor/core/shape
+import viva_tensor/core/tensor
 import viva_tensor/nn/autograd.{type Tape, Traced}
 import viva_tensor/nn/layers as nn
-import viva_tensor/core/tensor
-import viva_tensor/core/shape
-import viva_tensor/core/ops
 
 // Training Configuration
 const learning_rate = 0.01

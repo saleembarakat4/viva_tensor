@@ -172,11 +172,7 @@ pub fn main() {
   case sum_result {
     Ok(value) -> {
       io.println(
-        "  Sum: "
-        <> float_to_str(value)
-        <> " ("
-        <> format_time(sum_time)
-        <> ")",
+        "  Sum: " <> float_to_str(value) <> " (" <> format_time(sum_time) <> ")",
       )
     }
     Error(_) -> io.println("  Error computing sum")

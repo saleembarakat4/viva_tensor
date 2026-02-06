@@ -376,7 +376,9 @@ pub fn benchmark_awq() {
   io.println("  1. Collect activation statistics (calibration)")
   io.println("  2. Identify salient channels (high activation = important)")
   io.println("  3. Scale salient weights UP before quantizing")
-  io.println("  4. Scale activations DOWN at runtime (mathematically equivalent)")
+  io.println(
+    "  4. Scale activations DOWN at runtime (mathematically equivalent)",
+  )
   io.println("  Result: Protected channels get more quantization precision")
   io.println("")
 
@@ -401,7 +403,8 @@ pub fn benchmark_awq() {
   // Saliency analysis
   let salient_channels = identify_salient_channels(activation_stats, 1.0)
   io.println(
-    "  Salient channels (top 1%): " <> int.to_string(list.length(salient_channels)),
+    "  Salient channels (top 1%): "
+    <> int.to_string(list.length(salient_channels)),
   )
 
   io.println("  Top 5 most salient:")

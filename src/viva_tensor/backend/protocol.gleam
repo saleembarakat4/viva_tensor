@@ -106,9 +106,7 @@ pub fn info(backend: Backend) -> String {
     Accelerate -> ffi.nif_backend_info()
     Zig -> ffi.zig_backend_info()
     Distributed(nodes) ->
-      "Distributed across "
-      <> int_to_string(list.length(nodes))
-      <> " nodes"
+      "Distributed across " <> int_to_string(list.length(nodes)) <> " nodes"
   }
 }
 
@@ -282,8 +280,7 @@ fn distributed_matmul(
       let remainder = m % node_count
 
       // Create shards - first 'remainder' nodes get one extra row
-      let shards =
-        create_row_shards(a, k, rows_per_node, remainder, node_count)
+      let shards = create_row_shards(a, k, rows_per_node, remainder, node_count)
 
       // Dispatch to nodes in parallel
       let tasks =
@@ -353,11 +350,7 @@ fn list_split(lst: List(a), n: Int) -> #(List(a), List(a)) {
   list_split_acc(lst, n, [])
 }
 
-fn list_split_acc(
-  lst: List(a),
-  n: Int,
-  acc: List(a),
-) -> #(List(a), List(a)) {
+fn list_split_acc(lst: List(a), n: Int, acc: List(a)) -> #(List(a), List(a)) {
   case n <= 0 {
     True -> #(list.reverse(acc), lst)
     False ->

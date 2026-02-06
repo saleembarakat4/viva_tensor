@@ -46,22 +46,38 @@ import viva_tensor/tensor.{type Tensor, Tensor}
 /// Derivation: quantile(k/16) for k in 1..16, then normalized
 pub fn nf4_levels() -> List(Float) {
   [
-    -1.0,                  // quantile(1/16) - left tail
-    -0.6961928009986877,   // quantile(2/16)
-    -0.5250730514526367,   // quantile(3/16)
-    -0.39491748809814453,  // quantile(4/16)
-    -0.28444138169288635,  // quantile(5/16)
-    -0.18477343022823334,  // quantile(6/16)
-    -0.09105003625154495,  // quantile(7/16)
-    0.0,                   // quantile(8/16) - exact zero!
-    0.07958029955625534,   // quantile(9/16)
-    0.16093020141124725,   // quantile(10/16)
-    0.24611230194568634,   // quantile(11/16)
-    0.33791524171829224,   // quantile(12/16)
-    0.44070982933044434,   // quantile(13/16)
-    0.5626170039176941,    // quantile(14/16)
-    0.7229568362236023,    // quantile(15/16)
-    1.0,                   // quantile(16/16) - right tail
+    -1.0,
+    // quantile(1/16) - left tail
+    -0.6961928009986877,
+    // quantile(2/16)
+    -0.5250730514526367,
+    // quantile(3/16)
+    -0.39491748809814453,
+    // quantile(4/16)
+    -0.28444138169288635,
+    // quantile(5/16)
+    -0.18477343022823334,
+    // quantile(6/16)
+    -0.09105003625154495,
+    // quantile(7/16)
+    0.0,
+    // quantile(8/16) - exact zero!
+    0.07958029955625534,
+    // quantile(9/16)
+    0.16093020141124725,
+    // quantile(10/16)
+    0.24611230194568634,
+    // quantile(11/16)
+    0.33791524171829224,
+    // quantile(12/16)
+    0.44070982933044434,
+    // quantile(13/16)
+    0.5626170039176941,
+    // quantile(14/16)
+    0.7229568362236023,
+    // quantile(15/16)
+    1.0,
+    // quantile(16/16) - right tail
   ]
 }
 
@@ -270,8 +286,10 @@ pub fn double_quantize(t: Tensor, config: NF4Config) -> DoubleQuantNF4 {
   // Memory: 4 bits/value + 8 bits/block (INT8 scale) + 4 bytes global
   let num_blocks = list.length(nf4.blocks)
   let data_bytes = nf4.num_elements / 2
-  let scale_bytes = num_blocks  // INT8 = 1 byte per block
-  let memory = data_bytes + scale_bytes + 4  // +4 for global FP32 scale
+  let scale_bytes = num_blocks
+  // INT8 = 1 byte per block
+  let memory = data_bytes + scale_bytes + 4
+  // +4 for global FP32 scale
 
   DoubleQuantNF4(
     blocks: nf4.blocks,
@@ -349,9 +367,7 @@ pub fn benchmark_nf4() {
   io.println("  Note: More levels near zero where weights concentrate")
   nf4_levels()
   |> list.index_map(fn(level, idx) {
-    io.println(
-      "  [" <> int.to_string(idx) <> "]: " <> float_to_string(level)
-    )
+    io.println("  [" <> int.to_string(idx) <> "]: " <> float_to_string(level))
   })
 
   io.println("\n--- Benchmark: 1024x512 Tensor ---")

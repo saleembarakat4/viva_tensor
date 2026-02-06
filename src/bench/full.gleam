@@ -9,9 +9,9 @@ import gleam/io
 import gleam/list
 import gleam/string
 
+import viva_tensor/metrics
 import viva_tensor/quant/awq
 import viva_tensor/quant/compression
-import viva_tensor/metrics
 import viva_tensor/quant/nf4
 import viva_tensor/tensor.{type Tensor}
 
@@ -436,7 +436,9 @@ fn print_comparison_table(original: Tensor, original_bytes: Int) {
   io.println("  - Compr.: Compression ratio (higher = better)")
   io.println("  - SNR Real: Measured Signal-to-Noise Ratio (higher = better)")
   io.println("  - SNR Theor.: Theoretical SQNR = 6.02*N + 1.76 dB")
-  io.println("  - Gap: Difference between theoretical and real (lower = better)")
+  io.println(
+    "  - Gap: Difference between theoretical and real (lower = better)",
+  )
   io.println("  - Cosine: Cosine similarity (1.0 = perfect)")
 
   io.println("")

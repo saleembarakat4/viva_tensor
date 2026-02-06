@@ -100,7 +100,8 @@ pub type FlashResult {
 pub fn default_config(head_dim: Int) -> FlashConfig {
   let scale = case float.square_root(int.to_float(head_dim)) {
     Ok(sqrt) -> 1.0 /. sqrt
-    Error(_) -> 0.125  // fallback for head_dim=64
+    Error(_) -> 0.125
+    // fallback for head_dim=64
   }
   FlashConfig(block_q: 64, block_kv: 64, scale: scale, causal: False)
 }
@@ -264,7 +265,8 @@ fn process_q_block(
   let initial_stats =
     list.map(q_block, fn(_) {
       OnlineStats(
-        max_val: -999_999.0,  // Will be updated on first real score
+        max_val: -999_999.0,
+        // Will be updated on first real score
         sum_exp: 0.0,
         output: list.repeat(0.0, head_dim),
       )
@@ -443,8 +445,10 @@ pub fn benchmark_flash_attention() {
   let long_contexts = [1024, 2048, 4096, 8192, 16_384, 32_768]
 
   list.each(long_contexts, fn(n) {
-    let naive_mem = n * n * 4          // Full n x n matrix in FP32
-    let flash_mem = 64 * 64 * 4        // Just one tile
+    let naive_mem = n * n * 4
+    // Full n x n matrix in FP32
+    let flash_mem = 64 * 64 * 4
+    // Just one tile
 
     let saved =
       100.0 *. { 1.0 -. int.to_float(flash_mem) /. int.to_float(naive_mem) }

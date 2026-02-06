@@ -230,8 +230,13 @@ fn test_sum_correctness() {
 
 fn benchmark_gflops(m: Int, n: Int, k: Int) {
   let size_str =
-    int.to_string(m) <> "x" <> int.to_string(k) <> " @ " <> int.to_string(k)
-    <> "x" <> int.to_string(n)
+    int.to_string(m)
+    <> "x"
+    <> int.to_string(k)
+    <> " @ "
+    <> int.to_string(k)
+    <> "x"
+    <> int.to_string(n)
 
   // FLOPs for matmul: 2*M*N*K (multiply and add for each element)
   let flops = 2 * m * n * k
@@ -247,16 +252,16 @@ fn benchmark_gflops(m: Int, n: Int, k: Int) {
   // Pure Erlang
   let a_arr = ffi.list_to_array(a_data)
   let b_arr = ffi.list_to_array(b_data)
-  let #(pure_time, _) = time_it(fn() { ffi.array_matmul(a_arr, b_arr, m, n, k) })
+  let #(pure_time, _) =
+    time_it(fn() { ffi.array_matmul(a_arr, b_arr, m, n, k) })
   let pure_gflops = compute_gflops(flops, pure_time)
   print_gflops_row("Pure Erlang", pure_time, pure_gflops)
 
   // Apple Accelerate
   case ffi.is_nif_loaded() {
     True -> {
-      let #(accel_time, _) = time_it(fn() {
-        ffi.nif_matmul(a_data, b_data, m, n, k)
-      })
+      let #(accel_time, _) =
+        time_it(fn() { ffi.nif_matmul(a_data, b_data, m, n, k) })
       let accel_gflops = compute_gflops(flops, accel_time)
       print_gflops_row("Apple Accelerate", accel_time, accel_gflops)
     }

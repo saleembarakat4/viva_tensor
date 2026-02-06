@@ -574,7 +574,9 @@ pub fn benchmark_blackwell_compression() {
   io.println("  Automatic distribution analysis")
   io.println("  Time: " <> int.to_string(time_adaptive / 1000) <> "ms")
   io.println(
-    "  Compression: " <> float_to_string(stats_adaptive.compression_ratio) <> "x",
+    "  Compression: "
+    <> float_to_string(stats_adaptive.compression_ratio)
+    <> "x",
   )
 
   // Memory hierarchy simulation

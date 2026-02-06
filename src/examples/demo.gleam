@@ -8,11 +8,11 @@ import gleam/io
 import gleam/list
 import gleam/string
 
+import viva_tensor/nn/flash_attention
+import viva_tensor/optim/sparsity
 import viva_tensor/quant/awq
 import viva_tensor/quant/compression
-import viva_tensor/nn/flash_attention
 import viva_tensor/quant/nf4
-import viva_tensor/optim/sparsity
 import viva_tensor/tensor.{type Tensor, Tensor}
 
 // ============================================================================

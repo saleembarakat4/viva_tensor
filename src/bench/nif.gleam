@@ -125,9 +125,7 @@ fn benchmark_matmul(m: Int, n: Int, k: Int) {
   // 1. Pure Erlang (baseline)
   let #(_pure_result, pure_time) = time_pure_matmul(a_data, b_data, m, n, k)
   io.println(
-    "  │ Pure Erlang        │ "
-    <> pad_time(pure_time)
-    <> " │ 1.00x        │",
+    "  │ Pure Erlang        │ " <> pad_time(pure_time) <> " │ 1.00x        │",
   )
 
   // 2. Apple Accelerate (C NIF)
@@ -231,9 +229,7 @@ fn benchmark_dot(size: Int) {
   let end_pure = now_microseconds()
   let pure_time = int.to_float(end_pure - start_pure) /. 1000.0
   io.println(
-    "  │ Pure Erlang        │ "
-    <> pad_time(pure_time)
-    <> " │ 1.00x        │",
+    "  │ Pure Erlang        │ " <> pad_time(pure_time) <> " │ 1.00x        │",
   )
 
   // Apple Accelerate
@@ -293,9 +289,7 @@ fn benchmark_sum(size: Int) {
   let end_pure = now_microseconds()
   let pure_time = int.to_float(end_pure - start_pure) /. 1000.0
   io.println(
-    "  │ Pure Erlang        │ "
-    <> pad_time(pure_time)
-    <> " │ 1.00x        │",
+    "  │ Pure Erlang        │ " <> pad_time(pure_time) <> " │ 1.00x        │",
   )
 
   // Apple Accelerate
