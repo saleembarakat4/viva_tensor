@@ -1,3 +1,8 @@
+/* _GNU_SOURCE must be defined BEFORE any includes for pthread_setaffinity_np */
+#if !defined(_WIN32) && !defined(_GNU_SOURCE)
+#define _GNU_SOURCE 1
+#endif
+
 /**
  * nif_entry.c - Erlang NIF interface for Zig SIMD tensor operations
  *
@@ -9,6 +14,11 @@
  * NIF Resources keep tensor data in contiguous C arrays. Erlang only holds
  * an opaque reference. No list<->array conversion on every operation.
  * GC calls the destructor to free native memory automatically.
+ *
+ * Intelligent Thread Management (MKL-style):
+ *   - Auto-detects CPU topology on NIF load
+ *   - Configures thread affinity for optimal cache usage
+ *   - Exports cpu_info struct to Zig for runtime decisions
  */
 
 #include "erl_nif.h"
@@ -16,6 +26,304 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
+
+#ifdef _WIN32
+#include <windows.h>
+#include <intrin.h>
+/* Intel MKL for optimized GEMM on Windows (600+ GFLOPS) */
+#include <mkl_cblas.h>
+#else
+#include <sched.h>
+#include <pthread.h>
+#include <unistd.h>
+#include <cblas.h>  /* OpenBLAS for optimized GEMM */
+#endif
+
+/* =========================================================================
+ * CPU Topology Detection (MKL-style intelligent runtime)
+ * ========================================================================= */
+
+typedef struct {
+  int logical_cpus;     /* Total logical CPUs (includes HT) */
+  int physical_cores;   /* Physical cores (no HT) */
+  int sockets;          /* Number of CPU sockets */
+  int l1_cache_kb;      /* L1 data cache per core (KB) */
+  int l2_cache_kb;      /* L2 cache per core (KB) */
+  int l3_cache_kb;      /* L3 cache total (KB) */
+  int has_avx2;         /* AVX2 support */
+  int has_avx512;       /* AVX-512 support */
+  int has_hybrid;       /* Intel hybrid (P+E cores) */
+  int p_cores;          /* Performance cores (if hybrid) */
+  int e_cores;          /* Efficiency cores (if hybrid) */
+  int threads_per_core; /* HT threads per core */
+  int optimal_threads;  /* Computed optimal thread count for GEMM */
+} CpuTopology;
+
+/* Global CPU topology - initialized once at NIF load */
+static CpuTopology g_cpu_info = {0};
+static int g_cpu_detected = 0;
+
+#ifdef _WIN32
+static void detect_cpu_topology_windows(void) {
+  SYSTEM_INFO sysInfo;
+  GetSystemInfo(&sysInfo);
+  g_cpu_info.logical_cpus = sysInfo.dwNumberOfProcessors;
+
+  /* Use GetLogicalProcessorInformation for detailed topology */
+  DWORD bufLen = 0;
+  GetLogicalProcessorInformation(NULL, &bufLen);
+  if (bufLen == 0) {
+    g_cpu_info.physical_cores = g_cpu_info.logical_cpus / 2;
+    g_cpu_info.threads_per_core = 2;
+    goto compute_optimal;
+  }
+
+  SYSTEM_LOGICAL_PROCESSOR_INFORMATION *buf =
+    (SYSTEM_LOGICAL_PROCESSOR_INFORMATION *)malloc(bufLen);
+  if (!buf) {
+    g_cpu_info.physical_cores = g_cpu_info.logical_cpus / 2;
+    g_cpu_info.threads_per_core = 2;
+    goto compute_optimal;
+  }
+
+  if (GetLogicalProcessorInformation(buf, &bufLen)) {
+    int cores = 0, l1 = 0, l2 = 0, l3 = 0;
+    DWORD offset = 0;
+    SYSTEM_LOGICAL_PROCESSOR_INFORMATION *ptr = buf;
+    while (offset < bufLen) {
+      switch (ptr->Relationship) {
+        case RelationProcessorCore:
+          cores++;
+          break;
+        case RelationCache:
+          if (ptr->Cache.Level == 1 && ptr->Cache.Type == CacheData)
+            l1 = ptr->Cache.Size / 1024;
+          else if (ptr->Cache.Level == 2)
+            l2 = ptr->Cache.Size / 1024;
+          else if (ptr->Cache.Level == 3)
+            l3 = ptr->Cache.Size / 1024;
+          break;
+        default:
+          break;
+      }
+      offset += sizeof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION);
+      ptr++;
+    }
+    g_cpu_info.physical_cores = cores > 0 ? cores : g_cpu_info.logical_cpus / 2;
+    g_cpu_info.l1_cache_kb = l1;
+    g_cpu_info.l2_cache_kb = l2;
+    g_cpu_info.l3_cache_kb = l3;
+  }
+  free(buf);
+
+  g_cpu_info.threads_per_core = g_cpu_info.logical_cpus / g_cpu_info.physical_cores;
+  g_cpu_info.sockets = 1;
+
+  /* Check for AVX2/AVX-512 via CPUID */
+  int cpuInfo[4];
+  __cpuid(cpuInfo, 7);
+  g_cpu_info.has_avx2 = (cpuInfo[1] & (1 << 5)) != 0;
+  g_cpu_info.has_avx512 = (cpuInfo[1] & (1 << 16)) != 0;
+
+  /* Check hybrid architecture (Intel 12th gen+) */
+  __cpuid(cpuInfo, 0x1A);
+  g_cpu_info.has_hybrid = (cpuInfo[0] != 0);
+  if (g_cpu_info.has_hybrid) {
+    /* Heuristic: assume ~1/3 are E-cores on typical hybrid CPUs */
+    g_cpu_info.p_cores = (g_cpu_info.physical_cores * 2) / 3;
+    g_cpu_info.e_cores = g_cpu_info.physical_cores - g_cpu_info.p_cores;
+  }
+
+compute_optimal:
+  /* Compute optimal threads for GEMM */
+  if (g_cpu_info.has_hybrid) {
+    /* Hybrid: use P-cores only for max single-thread perf, all cores for throughput */
+    g_cpu_info.optimal_threads = g_cpu_info.logical_cpus;
+  } else {
+    /* Non-hybrid: use all logical CPUs (HT helps hide memory latency) */
+    g_cpu_info.optimal_threads = g_cpu_info.logical_cpus;
+  }
+}
+#else /* Linux/macOS */
+static void detect_cpu_topology_linux(void) {
+  /* Read /proc/cpuinfo for detailed topology */
+  FILE *f = fopen("/proc/cpuinfo", "r");
+  if (!f) {
+    g_cpu_info.logical_cpus = sysconf(_SC_NPROCESSORS_ONLN);
+    g_cpu_info.physical_cores = g_cpu_info.logical_cpus / 2;
+    g_cpu_info.threads_per_core = 2;
+    goto compute_optimal;
+  }
+
+  char line[256];
+  int logical = 0, phys_ids[64] = {0}, core_ids[64] = {0};
+  int unique_phys = 0, unique_cores = 0;
+  int l1 = 0, l2 = 0, l3 = 0;
+  int avx2 = 0, avx512 = 0;
+
+  while (fgets(line, sizeof(line), f)) {
+    if (strncmp(line, "processor", 9) == 0) {
+      logical++;
+    } else if (strncmp(line, "physical id", 11) == 0) {
+      int id;
+      if (sscanf(line, "physical id : %d", &id) == 1 && id < 64) {
+        if (!phys_ids[id]) {
+          phys_ids[id] = 1;
+          unique_phys++;
+        }
+      }
+    } else if (strncmp(line, "core id", 7) == 0) {
+      int id;
+      if (sscanf(line, "core id : %d", &id) == 1 && id < 64) {
+        if (!core_ids[id]) {
+          core_ids[id] = 1;
+          unique_cores++;
+        }
+      }
+    } else if (strncmp(line, "cache size", 10) == 0) {
+      int sz;
+      if (sscanf(line, "cache size : %d KB", &sz) == 1) {
+        l3 = sz; /* Usually L3 is reported here */
+      }
+    } else if (strstr(line, "avx2")) {
+      avx2 = 1;
+    } else if (strstr(line, "avx512")) {
+      avx512 = 1;
+    }
+  }
+  fclose(f);
+
+  g_cpu_info.logical_cpus = logical > 0 ? logical : sysconf(_SC_NPROCESSORS_ONLN);
+  g_cpu_info.sockets = unique_phys > 0 ? unique_phys : 1;
+  g_cpu_info.physical_cores = unique_cores > 0 ? unique_cores * g_cpu_info.sockets
+                                               : g_cpu_info.logical_cpus / 2;
+  g_cpu_info.threads_per_core = g_cpu_info.logical_cpus / g_cpu_info.physical_cores;
+  g_cpu_info.l3_cache_kb = l3;
+  g_cpu_info.has_avx2 = avx2;
+  g_cpu_info.has_avx512 = avx512;
+
+  /* Try to read cache info from sysfs */
+  FILE *cache_f;
+  char buf[64];
+
+  cache_f = fopen("/sys/devices/system/cpu/cpu0/cache/index0/size", "r");
+  if (cache_f) {
+    if (fgets(buf, sizeof(buf), cache_f)) {
+      sscanf(buf, "%dK", &l1);
+      g_cpu_info.l1_cache_kb = l1;
+    }
+    fclose(cache_f);
+  }
+
+  cache_f = fopen("/sys/devices/system/cpu/cpu0/cache/index2/size", "r");
+  if (cache_f) {
+    if (fgets(buf, sizeof(buf), cache_f)) {
+      sscanf(buf, "%dK", &l2);
+      g_cpu_info.l2_cache_kb = l2;
+    }
+    fclose(cache_f);
+  }
+
+  /* Check for Intel hybrid via cpu_capacity (Linux 5.8+) */
+  cache_f = fopen("/sys/devices/system/cpu/cpu0/cpu_capacity", "r");
+  if (cache_f) {
+    int cap;
+    if (fgets(buf, sizeof(buf), cache_f) && sscanf(buf, "%d", &cap) == 1) {
+      if (cap < 1024) { /* Capacity < 1024 indicates E-core */
+        g_cpu_info.has_hybrid = 1;
+      }
+    }
+    fclose(cache_f);
+  }
+
+  /* Count P-cores and E-cores if hybrid */
+  if (g_cpu_info.has_hybrid) {
+    int p_count = 0, e_count = 0;
+    for (int i = 0; i < g_cpu_info.logical_cpus; i++) {
+      char path[128];
+      snprintf(path, sizeof(path), "/sys/devices/system/cpu/cpu%d/cpu_capacity", i);
+      cache_f = fopen(path, "r");
+      if (cache_f) {
+        int cap;
+        if (fgets(buf, sizeof(buf), cache_f) && sscanf(buf, "%d", &cap) == 1) {
+          if (cap >= 1024) p_count++;
+          else e_count++;
+        }
+        fclose(cache_f);
+      }
+    }
+    g_cpu_info.p_cores = p_count / g_cpu_info.threads_per_core;
+    g_cpu_info.e_cores = e_count; /* E-cores typically don't have HT */
+  }
+
+compute_optimal:
+  /* Compute optimal threads for GEMM based on detected topology */
+  if (g_cpu_info.has_hybrid && g_cpu_info.p_cores > 0) {
+    /* Hybrid: P-cores with HT for best GEMM performance */
+    g_cpu_info.optimal_threads = g_cpu_info.p_cores * g_cpu_info.threads_per_core;
+  } else {
+    /* Standard: all logical CPUs */
+    g_cpu_info.optimal_threads = g_cpu_info.logical_cpus;
+  }
+}
+#endif
+
+static void detect_cpu_topology(void) {
+  if (g_cpu_detected) return;
+
+#ifdef _WIN32
+  detect_cpu_topology_windows();
+#else
+  detect_cpu_topology_linux();
+#endif
+
+  g_cpu_detected = 1;
+}
+
+/* Export CPU topology to Zig */
+int vt_get_optimal_threads(void) {
+  return g_cpu_info.optimal_threads > 0 ? g_cpu_info.optimal_threads : 8;
+}
+
+int vt_get_physical_cores(void) {
+  return g_cpu_info.physical_cores > 0 ? g_cpu_info.physical_cores : 4;
+}
+
+int vt_get_logical_cpus(void) {
+  return g_cpu_info.logical_cpus > 0 ? g_cpu_info.logical_cpus : 8;
+}
+
+int vt_get_l2_cache_kb(void) {
+  return g_cpu_info.l2_cache_kb > 0 ? g_cpu_info.l2_cache_kb : 256;
+}
+
+int vt_get_l3_cache_kb(void) {
+  return g_cpu_info.l3_cache_kb > 0 ? g_cpu_info.l3_cache_kb : 8192;
+}
+
+int vt_is_hybrid_cpu(void) {
+  return g_cpu_info.has_hybrid;
+}
+
+int vt_has_avx512(void) {
+  return g_cpu_info.has_avx512;
+}
+
+/* Thread affinity helpers - called from Zig */
+#ifdef _WIN32
+int vt_set_thread_affinity(void* thread_handle, int core_id) {
+  DWORD_PTR mask = 1ULL << core_id;
+  return SetThreadAffinityMask((HANDLE)thread_handle, mask) != 0;
+}
+#else
+int vt_set_thread_affinity_self(int core_id) {
+  cpu_set_t cpuset;
+  CPU_ZERO(&cpuset);
+  CPU_SET(core_id, &cpuset);
+  return pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset) == 0;
+}
+#endif
 
 /* 64-byte aligned allocation for AVX-512 / cache-line alignment */
 #define TENSOR_ALIGN 64
@@ -660,6 +968,45 @@ static ERL_NIF_TERM nt_matmul(ErlNifEnv *env, int argc,
     return make_error(env, "out_of_memory");
 
   vt_simd_matmul(a->data, b->data, c->data, m, n, k);
+  return make_ok(env, make_tensor_term(env, c));
+}
+
+/** nt_matmul_blas(RefA, RefB, M, N, K) -> {ok, RefC}
+ *  Uses Intel MKL (Windows) or OpenBLAS (Unix) for optimized GEMM (600+ GFLOPS)
+ */
+static ERL_NIF_TERM nt_matmul_blas(ErlNifEnv *env, int argc,
+                                   const ERL_NIF_TERM argv[]) {
+  (void)argc;
+  NativeTensor *a = get_tensor(env, argv[0]);
+  NativeTensor *b = get_tensor(env, argv[1]);
+  if (!a || !b)
+    return make_error(env, "invalid_tensor");
+
+  int m_int, n_int, k_int;
+  if (!enif_get_int(env, argv[2], &m_int) ||
+      !enif_get_int(env, argv[3], &n_int) ||
+      !enif_get_int(env, argv[4], &k_int))
+    return make_error(env, "invalid_dimensions");
+
+  size_t m = (size_t)m_int, n = (size_t)n_int, k = (size_t)k_int;
+  if (a->size != (int)(m * k) || b->size != (int)(k * n))
+    return make_error(env, "size_mismatch");
+
+  int out_shape[2] = {m_int, n_int};
+  NativeTensor *c = alloc_tensor_uninit(2, out_shape);
+  if (!c)
+    return make_error(env, "out_of_memory");
+
+  /* C = alpha * A @ B + beta * C
+   * cblas_dgemm(order, transA, transB, m, n, k, alpha, A, lda, B, ldb, beta, C, ldc)
+   * Row-major: lda=k, ldb=n, ldc=n
+   */
+  cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
+              (int)m, (int)n, (int)k,
+              1.0, a->data, (int)k,
+              b->data, (int)n,
+              0.0, c->data, (int)n);
+
   return make_ok(env, make_tensor_term(env, c));
 }
 
@@ -1696,12 +2043,74 @@ static ERL_NIF_TERM nif_backend_info(ErlNifEnv *env, int argc,
                                      const ERL_NIF_TERM argv[]) {
   (void)argc;
   (void)argv;
-  const char *info = "Zig SIMD + NIF Resources (Vector length: 8, f64)";
+  char info[256];
+  snprintf(info, sizeof(info),
+           "Zig SIMD (Vec8 f64) | %d cores (%d logical) | L2:%dKB L3:%dKB | %s%s| %d threads",
+           g_cpu_info.physical_cores,
+           g_cpu_info.logical_cpus,
+           g_cpu_info.l2_cache_kb,
+           g_cpu_info.l3_cache_kb,
+           g_cpu_info.has_avx512 ? "AVX-512 " : (g_cpu_info.has_avx2 ? "AVX2 " : ""),
+           g_cpu_info.has_hybrid ? "Hybrid " : "",
+           g_cpu_info.optimal_threads);
   ErlNifBinary bin;
   if (!enif_alloc_binary(strlen(info), &bin))
     return enif_make_atom(env, "error");
   memcpy(bin.data, info, strlen(info));
   return enif_make_binary(env, &bin);
+}
+
+/** cpu_topology() -> {ok, Map}
+ * Returns detected CPU topology as Erlang map */
+static ERL_NIF_TERM nif_cpu_topology(ErlNifEnv *env, int argc,
+                                     const ERL_NIF_TERM argv[]) {
+  (void)argc;
+  (void)argv;
+
+  ERL_NIF_TERM keys[12], vals[12];
+  int i = 0;
+
+  keys[i] = enif_make_atom(env, "logical_cpus");
+  vals[i++] = enif_make_int(env, g_cpu_info.logical_cpus);
+
+  keys[i] = enif_make_atom(env, "physical_cores");
+  vals[i++] = enif_make_int(env, g_cpu_info.physical_cores);
+
+  keys[i] = enif_make_atom(env, "sockets");
+  vals[i++] = enif_make_int(env, g_cpu_info.sockets);
+
+  keys[i] = enif_make_atom(env, "threads_per_core");
+  vals[i++] = enif_make_int(env, g_cpu_info.threads_per_core);
+
+  keys[i] = enif_make_atom(env, "l1_cache_kb");
+  vals[i++] = enif_make_int(env, g_cpu_info.l1_cache_kb);
+
+  keys[i] = enif_make_atom(env, "l2_cache_kb");
+  vals[i++] = enif_make_int(env, g_cpu_info.l2_cache_kb);
+
+  keys[i] = enif_make_atom(env, "l3_cache_kb");
+  vals[i++] = enif_make_int(env, g_cpu_info.l3_cache_kb);
+
+  keys[i] = enif_make_atom(env, "has_avx2");
+  vals[i++] = enif_make_atom(env, g_cpu_info.has_avx2 ? "true" : "false");
+
+  keys[i] = enif_make_atom(env, "has_avx512");
+  vals[i++] = enif_make_atom(env, g_cpu_info.has_avx512 ? "true" : "false");
+
+  keys[i] = enif_make_atom(env, "has_hybrid");
+  vals[i++] = enif_make_atom(env, g_cpu_info.has_hybrid ? "true" : "false");
+
+  keys[i] = enif_make_atom(env, "optimal_threads");
+  vals[i++] = enif_make_int(env, g_cpu_info.optimal_threads);
+
+  if (g_cpu_info.has_hybrid) {
+    keys[i] = enif_make_atom(env, "p_cores");
+    vals[i++] = enif_make_int(env, g_cpu_info.p_cores);
+  }
+
+  ERL_NIF_TERM map;
+  enif_make_map_from_arrays(env, keys, vals, i, &map);
+  return make_ok(env, map);
 }
 
 /* =========================================================================
@@ -1711,6 +2120,10 @@ static ERL_NIF_TERM nif_backend_info(ErlNifEnv *env, int argc,
 static int nif_load(ErlNifEnv *env, void **priv, ERL_NIF_TERM info) {
   (void)priv;
   (void)info;
+
+  /* Detect CPU topology once at NIF load (MKL-style runtime init) */
+  detect_cpu_topology();
+
   TENSOR_RESOURCE = enif_open_resource_type(
       env, NULL, "NativeTensor", tensor_destructor, ERL_NIF_RT_CREATE, NULL);
   if (!TENSOR_RESOURCE)
@@ -1744,6 +2157,7 @@ static ErlNifFunc nif_funcs[] = {
     {"nif_simd_matmul", 5, nif_simd_matmul, 0},
     {"simd_available", 0, nif_simd_available, 0},
     {"backend_info", 0, nif_backend_info, 0},
+    {"cpu_topology", 0, nif_cpu_topology, 0},
 
     /* NIF Resource API — constructors */
     {"nt_zeros", 1, nt_zeros, 0},
@@ -1771,6 +2185,7 @@ static ErlNifFunc nif_funcs[] = {
 
     /* NIF Resource API — matrix ops */
     {"nt_matmul", 5, nt_matmul, ERL_NIF_DIRTY_JOB_CPU_BOUND},
+    {"nt_matmul_blas", 5, nt_matmul_blas, ERL_NIF_DIRTY_JOB_CPU_BOUND},  /* MKL/OpenBLAS */
     {"nt_transpose", 1, nt_transpose, ERL_NIF_DIRTY_JOB_CPU_BOUND},
 
     /* NIF Resource API — activations (dirty: SIMD polynomial approx on large

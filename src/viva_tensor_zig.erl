@@ -13,7 +13,8 @@
     simd_matmul/5,
     simd_available/0,
     backend_info/0,
-    is_loaded/0
+    is_loaded/0,
+    cpu_topology/0
 ]).
 
 %% NIF Resource API - zero-copy tensor operations
@@ -22,7 +23,7 @@
     nt_to_list/1, nt_shape/1, nt_size/1,
     nt_add/2, nt_sub/2, nt_mul/2, nt_scale/2, nt_negate/1,
     nt_dot/2, nt_sum/1, nt_max/1, nt_min/1,
-    nt_matmul/5, nt_transpose/1,
+    nt_matmul/5, nt_matmul_blas/5, nt_transpose/1,
     nt_relu/1, nt_sigmoid/1, nt_exp/1, nt_log/1,
     %% In-place mutation (zero allocation)
     nt_add_mut/2, nt_scale_mut/2, nt_negate_mut/1, nt_relu_mut/1,
@@ -217,6 +218,9 @@ nif_simd_available() ->
 nif_backend_info() ->
     erlang:nif_error(nif_not_loaded).
 
+cpu_topology() ->
+    erlang:nif_error(nif_not_loaded).
+
 %% ==========================================================================
 %% NIF Resource API Stubs (replaced by C NIFs on load)
 %% ==========================================================================
@@ -247,6 +251,7 @@ nt_min(_Ref) -> erlang:nif_error(nif_not_loaded).
 
 %% Matrix ops
 nt_matmul(_A, _B, _M, _N, _K) -> erlang:nif_error(nif_not_loaded).
+nt_matmul_blas(_A, _B, _M, _N, _K) -> erlang:nif_error(nif_not_loaded).
 nt_transpose(_Ref) -> erlang:nif_error(nif_not_loaded).
 
 %% Activations

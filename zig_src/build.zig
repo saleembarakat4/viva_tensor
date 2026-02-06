@@ -11,6 +11,13 @@ pub fn build(b: *std.Build) void {
         "Path to Erlang NIF headers",
     ) orelse "/usr/local/lib/erlang/usr/include";
 
+    // Get MKL path for Windows (via winget install Intel.oneMKL)
+    const mkl_root = b.option(
+        []const u8,
+        "mkl_root",
+        "Path to Intel MKL installation",
+    ) orelse "C:/PROGRA~2/Intel/oneAPI/mkl/latest";
+
     // Zig 0.15+ API: addLibrary with explicit linkage
     const lib = b.addLibrary(.{
         .name = "viva_tensor_zig",
@@ -39,6 +46,23 @@ pub fn build(b: *std.Build) void {
 
     // Link with libc (needed by nif_entry.c)
     lib.linkLibC();
+
+    // Link with optimized BLAS for GEMM (600+ GFLOPS)
+    if (target.result.os.tag == .windows) {
+        // Intel MKL 2025.3 on Windows (via winget install Intel.oneMKL)
+        // mkl_rt.dll handles all threading automatically (uses TBB)
+        const mkl_inc = b.fmt("{s}/include", .{mkl_root});
+        const mkl_lib = b.fmt("{s}/lib", .{mkl_root});
+        lib.addIncludePath(.{ .cwd_relative = mkl_inc });
+        lib.addLibraryPath(.{ .cwd_relative = mkl_lib });
+        lib.linkSystemLibrary("mkl_rt");
+    } else {
+        // OpenBLAS 0.3.31 (DYNAMIC_ARCH) on Unix
+        lib.addLibraryPath(.{ .cwd_relative = "../deps/openblas/lib" });
+        lib.addIncludePath(.{ .cwd_relative = "../deps/openblas/include" });
+        lib.linkSystemLibrary("openblas");
+        lib.addRPath(.{ .cwd_relative = "../deps/openblas/lib" });
+    }
 
     // Install the library
     b.installArtifact(lib);

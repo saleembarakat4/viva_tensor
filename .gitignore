@@ -11,3 +11,6 @@ priv/*.so
 zig_src/.zig-cache/
 zig_src/zig-out/
 zig_src/*.dylib
+deps/
+*.dll
+erl_crash.dump
