@@ -1,17 +1,23 @@
-//// Shape Operations - Tensor shape manipulation
+//// Shape manipulation - reshape, slice, concat, stack.
 ////
-//// Reshape, flatten, squeeze, unsqueeze, slice, concat, and stack operations.
+//// The "plumbing" of tensor operations. Not glamorous, but essential.
+////
+//// Philosophy: these ops should be zero-copy when possible (via strides),
+//// but we're not there yet. Current implementation copies data.
+//// TODO: implement as views where safe (reshape of contiguous tensor, slice, etc.)
+////
+//// Reshape is particularly tricky because it changes how we interpret memory.
+//// A [2,3] tensor reshaped to [3,2] has the same data but different semantics.
+//// This only works if the tensor is contiguous (strides match row-major order).
 
 import gleam/int
 import gleam/list
 import viva_tensor/core/error.{type TensorError}
 import viva_tensor/core/tensor.{type Tensor}
 
-// =============================================================================
-// RESHAPE OPERATIONS
-// =============================================================================
+// --- Reshape ----------------------------------------------------------------
 
-/// Reshape tensor to new shape (same total size required)
+/// Reshape to new dimensions. Total size must match (obviously).
 pub fn reshape(t: Tensor, new_shape: List(Int)) -> Result(Tensor, TensorError) {
   let old_size = tensor.size(t)
   let new_size = list.fold(new_shape, 1, fn(acc, dim) { acc * dim })
@@ -97,11 +103,9 @@ pub fn expand_dims(t: Tensor, axis: Int) -> Tensor {
   unsqueeze(t, axis)
 }
 
-// =============================================================================
-// SLICING OPERATIONS
-// =============================================================================
+// --- Slicing ----------------------------------------------------------------
 
-/// Take first N elements along first axis
+/// Take first n elements (along axis 0).
 pub fn take_first(t: Tensor, n: Int) -> Tensor {
   let data = tensor.to_list(t)
   case tensor.shape(t) {
@@ -138,7 +142,8 @@ pub fn take_last(t: Tensor, n: Int) -> Tensor {
   }
 }
 
-/// Slice tensor: extract sub-tensor from start with given lengths
+/// General slice - specify start indices and lengths for each dimension.
+/// This one's tricky for n-dimensional tensors.
 pub fn slice(
   t: Tensor,
   start: List(Int),
@@ -190,17 +195,20 @@ pub fn slice(
   }
 }
 
-// =============================================================================
-// CONCATENATION OPERATIONS
-// =============================================================================
+// --- Concat & Stack ---------------------------------------------------------
 
-/// Concatenate 1D tensors (vectors)
+/// Concat 1D tensors. Just appends the data, nothing fancy.
 pub fn concat(tensors: List(Tensor)) -> Tensor {
   let data = list.flat_map(tensors, fn(t) { tensor.to_list(t) })
   tensor.from_list(data)
 }
 
-/// Concatenate tensors along a specific axis
+/// Concat along arbitrary axis.
+///
+/// This function is gnarly. The general case requires computing which source
+/// tensor each output index maps to, then translating coordinates. O(n) where
+/// n is total output size, but the constant factor is high due to all the
+/// index arithmetic. For axis=0, we fast-path to simple concatenation.
 pub fn concat_axis(
   tensors: List(Tensor),
   axis: Int,
@@ -374,9 +382,17 @@ pub fn stack(tensors: List(Tensor), axis: Int) -> Result(Tensor, TensorError) {
   }
 }
 
-// =============================================================================
-// INTERNAL HELPERS
-// =============================================================================
+// --- Helpers ----------------------------------------------------------------
+// Index conversion between flat and multi-dimensional representations.
+// flat_to_multi: linear index → [i, j, k, ...]
+// multi_to_flat: [i, j, k, ...] → linear index
+//
+// The formula: flat = Σ(index[i] * stride[i])
+// where stride[i] = Π(shape[j]) for j > i (row-major order)
+//
+// Example: shape [2,3,4], index [1,2,3]
+//   strides = [12, 4, 1]
+//   flat = 1*12 + 2*4 + 3*1 = 23
 
 fn flat_to_multi(flat: Int, shape: List(Int)) -> List(Int) {
   let reversed = list.reverse(shape)

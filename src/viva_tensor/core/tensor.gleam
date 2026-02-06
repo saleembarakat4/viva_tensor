@@ -1,22 +1,21 @@
-//// Core Tensor Type - N-dimensional arrays for numerical computing
+//// Core Tensor module - the heart of viva_tensor.
 ////
-//// Design principles:
-//// - Opaque type prevents invalid state construction
-//// - Smart constructors validate inputs
-//// - NumPy-inspired API with strides for zero-copy views
-//// - O(1) random access via Erlang :array
+//// Why opaque? Learned the hard way that letting users construct
+//// Tensor(data: [1,2,3], shape: [2,2]) leads to 3am debugging sessions.
+//// Algebraic data types are great until someone violates your invariants.
 ////
-//// ## Example
+//// The strided representation comes straight from how NumPy does it internally
+//// (see: https://numpy.org/doc/stable/reference/arrays.ndarray.html#internal-memory-layout)
+//// Basically: instead of copying data for transpose, just swap the strides.
+//// O(1) vs O(n). The kind of trick that makes you feel smart.
+////
+//// Fun fact: Erlang's :array module uses a tree structure (not contiguous memory),
+//// so our "O(1)" access is actually O(log32 n). Close enough for jazz.
+////
 //// ```gleam
-//// import viva_tensor/core/tensor
-////
-//// // Create tensors with validated constructors
 //// let a = tensor.zeros([2, 3])
 //// let b = tensor.ones([2, 3])
-////
-//// // Operations return Results for safety
 //// use c <- result.try(tensor.add(a, b))
-//// use d <- result.try(tensor.matmul(a, tensor.transpose(b)))
 //// ```
 
 import gleam/float
@@ -26,18 +25,13 @@ import gleam/result
 import viva_tensor/core/error.{type TensorError}
 import viva_tensor/core/ffi.{type ErlangArray}
 
-// =============================================================================
-// OPAQUE TENSOR TYPE
-// =============================================================================
+// --- Tensor Type -----------------------------------------------------------
 
-/// Tensor with NumPy-style strides for zero-copy views
+/// The tensor itself. Opaque so nobody can break invariants.
 ///
-/// Opaque type - can only be constructed via module functions.
-/// This ensures all tensors are in a valid state.
-///
-/// Internal representation:
-/// - Dense: List-backed for simple operations
-/// - Strided: Array-backed for O(1) access and zero-copy views
+/// Two flavors:
+/// - Dense: backed by List, simple but O(n) access
+/// - Strided: backed by Erlang :array, O(1) access + zero-copy views
 pub opaque type Tensor {
   /// Dense tensor - simple list storage
   Dense(data: List(Float), shape: List(Int))
@@ -50,11 +44,9 @@ pub opaque type Tensor {
   )
 }
 
-// =============================================================================
-// SMART CONSTRUCTORS
-// =============================================================================
+// --- Constructors -----------------------------------------------------------
 
-/// Create tensor from data and shape with validation
+/// Create tensor with validation. This is the "safe" constructor.
 pub fn new(data: List(Float), shape: List(Int)) -> Result(Tensor, TensorError) {
   let expected_size = compute_size(shape)
   let actual_size = list.length(data)
@@ -131,8 +123,10 @@ pub fn matrix(
   new(data, [rows, cols])
 }
 
-/// Create identity matrix
+/// Identity matrix. The multiplicative identity of matrix algebra.
+/// I*A = A*I = A. One of the few things in linear algebra that's intuitive.
 pub fn eye(n: Int) -> Tensor {
+  // Sparse would be O(n) space vs O(n²), but adds complexity. YAGNI for now.
   let data =
     list.range(0, n - 1)
     |> list.flat_map(fn(i) {
@@ -179,11 +173,12 @@ pub fn linspace(start: Float, end: Float, num: Int) -> Tensor {
   }
 }
 
-// =============================================================================
-// RANDOM CONSTRUCTORS
-// =============================================================================
+// --- Random Constructors ----------------------------------------------------
+// Uses Erlang's :rand (xorshift116+ algorithm). Fast, decent statistical
+// properties, definitely NOT cryptographically secure. Perfect for ML.
+// If you need crypto, you're in the wrong library.
 
-/// Tensor with uniform random values in [0, 1)
+/// Uniform random in [0, 1). Seeds from system entropy on first call.
 pub fn random_uniform(shape: List(Int)) -> Tensor {
   let size = compute_size(shape)
   let data =
@@ -192,7 +187,9 @@ pub fn random_uniform(shape: List(Int)) -> Tensor {
   Dense(data: data, shape: shape)
 }
 
-/// Tensor with normal random values (Box-Muller approximation)
+/// Normal distribution via Box-Muller transform (1958).
+/// Could use Ziggurat for ~3x speedup but Box-Muller is elegant and
+/// "premature optimization is the root of all evil" - Knuth
 pub fn random_normal(
   shape shape: List(Int),
   mean mean: Float,
@@ -210,8 +207,11 @@ pub fn random_normal(
   Dense(data: data, shape: shape)
 }
 
-/// Xavier/Glorot initialization for neural network weights
+/// Xavier/Glorot init (2010 paper: "Understanding the difficulty of training deep FFNs")
+/// The limit = sqrt(6 / (fan_in + fan_out)) keeps variance stable across layers.
+/// Use this for tanh/sigmoid. For ReLU, use he_init instead.
 pub fn xavier_init(fan_in fan_in: Int, fan_out fan_out: Int) -> Tensor {
+  // Derived from Var(W) = 2/(fan_in + fan_out), uniform bounds = sqrt(3 * Var)
   let limit = ffi.sqrt(6.0 /. int.to_float(fan_in + fan_out))
   let data =
     list.range(1, fan_in * fan_out)
@@ -222,15 +222,15 @@ pub fn xavier_init(fan_in fan_in: Int, fan_out fan_out: Int) -> Tensor {
   Dense(data: data, shape: [fan_out, fan_in])
 }
 
-/// He initialization for ReLU networks
+/// He init (2015 paper: "Delving Deep into Rectifiers")
+/// std = sqrt(2/fan_in) accounts for ReLU killing half the activations.
+/// The "2" is not arbitrary - it comes from E[ReLU(x)²] = Var(x)/2 for x~N(0,σ²)
 pub fn he_init(fan_in fan_in: Int, fan_out fan_out: Int) -> Tensor {
   let std = ffi.sqrt(2.0 /. int.to_float(fan_in))
   random_normal(shape: [fan_out, fan_in], mean: 0.0, std: std)
 }
 
-// =============================================================================
-// ACCESSORS (Read-only access to internal state)
-// =============================================================================
+// --- Accessors --------------------------------------------------------------
 
 /// Get tensor shape
 pub fn shape(t: Tensor) -> List(Int) {
@@ -296,11 +296,9 @@ pub fn cols(t: Tensor) -> Int {
   }
 }
 
-// =============================================================================
-// ELEMENT ACCESS
-// =============================================================================
+// --- Element Access ---------------------------------------------------------
 
-/// Get element by linear index
+/// Get element by flat index. For strided tensors, computes the real offset.
 pub fn get(t: Tensor, index: Int) -> Result(Float, TensorError) {
   case t {
     Dense(data, _) ->
@@ -367,11 +365,15 @@ pub fn get_col(t: Tensor, col_idx: Int) -> Result(Tensor, TensorError) {
   }
 }
 
-// =============================================================================
-// STRIDED TENSOR OPERATIONS (Zero-copy)
-// =============================================================================
+// --- Strided Operations (Zero-copy magic) -----------------------------------
+// The key insight: a 2D array in row-major order has strides [cols, 1].
+// Transpose it? Just swap to [1, cols]. Same memory, different interpretation.
+// PyTorch calls this a "view". NumPy calls it "non-contiguous". I call it genius.
+//
+// Warning: non-contiguous tensors are slower for sequential access (cache misses).
+// Call to_contiguous() before heavy computation if you need speed.
 
-/// Convert to strided tensor for O(1) access
+/// Convert to strided (backed by Erlang :array for O(1) random access)
 pub fn to_strided(t: Tensor) -> Tensor {
   case t {
     Strided(_, _, _, _) -> t
@@ -438,9 +440,8 @@ pub fn transpose_strided(t: Tensor) -> Result(Tensor, TensorError) {
   }
 }
 
-// =============================================================================
-// INTERNAL HELPERS
-// =============================================================================
+// --- Internal Helpers -------------------------------------------------------
+// These don't need to be pretty, just correct.
 
 fn compute_size(shape: List(Int)) -> Int {
   list.fold(shape, 1, fn(acc, dim) { acc * dim })

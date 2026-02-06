@@ -1,47 +1,22 @@
-//// Centralized Error Types - All tensor operation errors
+//// Centralized error types for tensor operations.
 ////
-//// This module provides a unified error type for all tensor operations,
-//// ensuring consistent error handling across the library.
+//// Philosophy: fail fast, fail loud, fail informatively.
 ////
-//// ## Usage
+//// Each error variant carries enough context to debug the issue without
+//// printf-debugging. ShapeMismatch tells you both shapes. IndexOutOfBounds
+//// tells you the index AND the size. No more "index out of bounds" with no context.
 ////
-//// ```gleam
-//// import viva_tensor/core/error.{type TensorError}
-////
-//// pub fn my_operation(t: Tensor) -> Result(Tensor, TensorError) {
-////   case validate(t) {
-////     True -> Ok(transform(t))
-////     False -> Error(error.InvalidShape("Must be 2D"))
-////   }
-//// }
-//// ```
-////
-//// ## Error Formatting
-////
-//// ```gleam
-//// case ops.add(a, b) {
-////   Ok(result) -> result
-////   Error(e) -> panic as error.to_string(e)
-//// }
-//// ```
+//// Why a single error type instead of operation-specific ones?
+//// - Simpler API (one Result type everywhere)
+//// - Easy to convert to user-facing messages
+//// - Pattern matching still works for specific handling
 
 import gleam/int
 import gleam/list
 import gleam/string
 
-// =============================================================================
-// TENSOR ERRORS
-// =============================================================================
-
-/// Comprehensive error type for all tensor operations.
-///
-/// Each variant provides detailed context for debugging:
-/// - `ShapeMismatch` - Two tensors have incompatible shapes
-/// - `InvalidShape` - Shape specification is invalid
-/// - `DimensionError` - Axis out of bounds or dimension issue
-/// - `BroadcastError` - Shapes cannot be broadcast together
-/// - `IndexOutOfBounds` - Element access outside valid range
-/// - `DtypeError` - Data type incompatibility
+/// All the ways tensor operations can fail.
+/// Tried to keep it minimal but expressive.
 pub type TensorError {
   /// Shape mismatch between two tensors.
   ///
@@ -80,18 +55,9 @@ pub type TensorError {
   DtypeError(reason: String)
 }
 
-// =============================================================================
-// ERROR FORMATTING
-// =============================================================================
+// --- Formatting -------------------------------------------------------------
 
-/// Convert error to human-readable string.
-///
-/// ## Examples
-///
-/// ```gleam
-/// error.to_string(ShapeMismatch([2, 3], [4, 5]))
-/// // -> "Shape mismatch: expected [2, 3], got [4, 5]"
-/// ```
+/// Human-readable error message. Useful for debugging.
 pub fn to_string(error: TensorError) -> String {
   case error {
     ShapeMismatch(expected, got) ->
@@ -120,14 +86,7 @@ pub fn to_string(error: TensorError) -> String {
   }
 }
 
-/// Format shape as string [d0, d1, ...].
-///
-/// ## Examples
-///
-/// ```gleam
-/// error.shape_to_string([2, 3, 4])
-/// // -> "[2, 3, 4]"
-/// ```
+/// Pretty-print a shape like [2, 3, 4].
 pub fn shape_to_string(shape: List(Int)) -> String {
   "[" <> string.join(list.map(shape, int.to_string), ", ") <> "]"
 }
