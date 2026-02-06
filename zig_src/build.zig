@@ -11,23 +11,26 @@ pub fn build(b: *std.Build) void {
         "Path to Erlang NIF headers",
     ) orelse "/usr/local/lib/erlang/usr/include";
 
-    const lib = b.addSharedLibrary(.{
+    // Zig 0.15+ API: addLibrary with explicit linkage
+    const lib = b.addLibrary(.{
         .name = "viva_tensor_zig",
-        .root_source_file = b.path("viva_zig.zig"),
-        .target = target,
-        .optimize = optimize,
+        .linkage = .dynamic,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("viva_zig.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
     });
 
+    // Allow undefined symbols - BEAM resolves enif_* at NIF load time
+    lib.linker_allow_shlib_undefined = true;
+
     // Add Erlang NIF headers
-    lib.addIncludePath(.{ .cwd_relative = erl_include });
+    lib.root_module.addIncludePath(.{ .cwd_relative = erl_include });
 
     // Link with libc for erl_nif
     lib.linkLibC();
 
     // Install the library
     b.installArtifact(lib);
-
-    // Add a run step
-    const run_step = b.step("run", "Build the NIF library");
-    run_step.dependOn(b.getInstallStep());
 }

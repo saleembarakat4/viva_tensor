@@ -9,6 +9,7 @@
     simd_sum/1,
     simd_scale/2,
     simd_add/2,
+    simd_mul/2,
     simd_matmul/5,
     simd_available/0,
     backend_info/0,
@@ -111,6 +112,19 @@ simd_add(A, B) ->
     end.
 
 %% ==========================================================================
+%% SIMD Element-wise Multiply
+%% ==========================================================================
+
+simd_mul(A, B) ->
+    case is_loaded() of
+        true ->
+            try nif_simd_mul(A, B)
+            catch error:nif_not_loaded -> {ok, [X * Y || {X, Y} <- lists:zip(A, B)]}
+            end;
+        false -> {ok, [X * Y || {X, Y} <- lists:zip(A, B)]}
+    end.
+
+%% ==========================================================================
 %% SIMD Matrix Multiplication
 %% ==========================================================================
 
@@ -151,6 +165,9 @@ nif_simd_scale(_Data, _Scalar) ->
     erlang:nif_error(nif_not_loaded).
 
 nif_simd_add(_A, _B) ->
+    erlang:nif_error(nif_not_loaded).
+
+nif_simd_mul(_A, _B) ->
     erlang:nif_error(nif_not_loaded).
 
 nif_simd_matmul(_A, _B, _M, _N, _K) ->

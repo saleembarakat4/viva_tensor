@@ -424,6 +424,11 @@ pub fn zig_add(a: List(Float), b: List(Float)) -> Result(List(Float), String) {
   zig_add_ffi(a, b)
 }
 
+/// Zig SIMD element-wise multiply.
+pub fn zig_mul(a: List(Float), b: List(Float)) -> Result(List(Float), String) {
+  zig_mul_ffi(a, b)
+}
+
 /// Zig SIMD matrix multiplication.
 ///
 /// Tiled implementation with SIMD inner loops.
@@ -459,6 +464,9 @@ fn zig_scale_ffi(
 
 @external(erlang, "viva_tensor_zig", "simd_add")
 fn zig_add_ffi(a: List(Float), b: List(Float)) -> Result(List(Float), String)
+
+@external(erlang, "viva_tensor_zig", "simd_mul")
+fn zig_mul_ffi(a: List(Float), b: List(Float)) -> Result(List(Float), String)
 
 @external(erlang, "viva_tensor_zig", "simd_matmul")
 fn zig_matmul_ffi(

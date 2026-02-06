@@ -185,6 +185,24 @@ fn simd_add_impl(a: []const f64, b: []const f64, result: []f64) void {
     }
 }
 
+/// SIMD-accelerated element-wise multiply
+fn simd_mul_impl(a: []const f64, b: []const f64, result: []f64) void {
+    var i: usize = 0;
+    const len = @min(a.len, b.len);
+
+    // Process VEC_LEN elements at a time
+    while (i + VEC_LEN <= len) : (i += VEC_LEN) {
+        const va: Vec = a[i..][0..VEC_LEN].*;
+        const vb: Vec = b[i..][0..VEC_LEN].*;
+        result[i..][0..VEC_LEN].* = va * vb;
+    }
+
+    // Handle remaining elements
+    while (i < len) : (i += 1) {
+        result[i] = a[i] * b[i];
+    }
+}
+
 /// SIMD-accelerated matrix multiplication with blocking
 /// A[m,k] @ B[k,n] -> C[m,n]
 fn simd_matmul_impl(a: []const f64, b: []const f64, c: []f64, m: usize, n: usize, k: usize) void {
@@ -347,6 +365,38 @@ fn nif_simd_add(env: ?*erl.ErlNifEnv, argc: c_int, argv: [*c]const erl.ERL_NIF_T
     return make_ok(env, slice_to_list(env, result));
 }
 
+/// NIF: SIMD element-wise multiply
+fn nif_simd_mul(env: ?*erl.ErlNifEnv, argc: c_int, argv: [*c]const erl.ERL_NIF_TERM) callconv(.c) erl.ERL_NIF_TERM {
+    if (argc != 2) return erl.enif_make_badarg(env);
+
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    const a = list_to_slice(env, argv[0], allocator) catch {
+        return make_error(env, "invalid_input");
+    };
+    defer allocator.free(a);
+
+    const b = list_to_slice(env, argv[1], allocator) catch {
+        return make_error(env, "invalid_input");
+    };
+    defer allocator.free(b);
+
+    if (a.len != b.len) {
+        return make_error(env, "length_mismatch");
+    }
+
+    const result = allocator.alloc(f64, a.len) catch {
+        return make_error(env, "out_of_memory");
+    };
+    defer allocator.free(result);
+
+    simd_mul_impl(a, b, result);
+
+    return make_ok(env, slice_to_list(env, result));
+}
+
 /// NIF: SIMD matrix multiplication
 fn nif_simd_matmul(env: ?*erl.ErlNifEnv, argc: c_int, argv: [*c]const erl.ERL_NIF_TERM) callconv(.c) erl.ERL_NIF_TERM {
     if (argc != 5) return erl.enif_make_badarg(env);
@@ -423,12 +473,13 @@ fn nif_backend_info(env: ?*erl.ErlNifEnv, argc: c_int, argv: [*c]const erl.ERL_N
 // NIF Initialization
 // =============================================================================
 
-const func_count = 7;
+const func_count = 8;
 var nif_funcs = [func_count]erl.ErlNifFunc{
     .{ .name = "nif_simd_dot", .arity = 2, .fptr = nif_simd_dot, .flags = 0 },
     .{ .name = "nif_simd_sum", .arity = 1, .fptr = nif_simd_sum, .flags = 0 },
     .{ .name = "nif_simd_scale", .arity = 2, .fptr = nif_simd_scale, .flags = 0 },
     .{ .name = "nif_simd_add", .arity = 2, .fptr = nif_simd_add, .flags = 0 },
+    .{ .name = "nif_simd_mul", .arity = 2, .fptr = nif_simd_mul, .flags = 0 },
     .{ .name = "nif_simd_matmul", .arity = 5, .fptr = nif_simd_matmul, .flags = 0 },
     .{ .name = "simd_available", .arity = 0, .fptr = nif_simd_available, .flags = 0 },
     .{ .name = "backend_info", .arity = 0, .fptr = nif_backend_info, .flags = 0 },
