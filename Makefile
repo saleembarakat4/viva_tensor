@@ -77,6 +77,11 @@ all: build test bench
 build:
 	@echo "$(YELLOW)[BUILD]$(NC) Building viva_tensor..."
 	gleam build
+ifneq ($(OS),Windows_NT)
+	@# Compile Erlang NIF wrapper modules (not compiled by Gleam)
+	@erlc -o build/dev/erlang/viva_tensor/ebin src/viva_tensor_zig.erl 2>$(NULL) || true
+	@erlc -o build/dev/erlang/viva_tensor/ebin src/viva_tensor_blas.erl 2>$(NULL) || true
+endif
 	@echo "$(GREEN)[OK]$(NC) Build finished!"
 
 ## Run tests

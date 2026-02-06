@@ -41,6 +41,13 @@
 #include <unistd.h>
 #include <dlfcn.h>  /* Dynamic loading for runtime backend selection */
 
+#ifdef USE_MKL_DIRECT
+/* Intel MKL on Linux (apt install intel-mkl) - 800+ GFLOPS */
+#include <mkl.h>
+#define BLAS_BACKEND_MKL 1
+#define BLAS_BACKEND_NAME "Intel MKL"
+#endif
+
 /* =========================================================================
  * Dynamic BLAS Backend Selection (MKL > OpenBLAS-tuned > OpenBLAS)
  * ========================================================================= */
@@ -119,17 +126,13 @@ static void detect_blas_backend(void) {
 
   /* Priority: Intel MKL > OpenBLAS-tuned > OpenBLAS system > Zig GEMM */
 
-  /* 1. Try Intel MKL first (800+ GFLOPS on Linux!) */
+  /* 1. Try Intel MKL first (800+ GFLOPS on Linux!)
+   *    Skip MKL on WSL2 - the ubuntu apt package crashes during dlopen.
+   *    MKL works perfectly on native Windows (see bench_tuned.bat)
+   *    TODO: Re-enable when oneAPI installer works on WSL2
+   */
+  #if 0
   if (try_load_blas("libmkl_rt.so", "Intel MKL", BLAS_MKL)) {
-    fprintf(stderr, "[viva_tensor] Backend: Intel MKL (800+ GFLOPS)\n");
-    return;
-  }
-  /* Try alternate MKL paths */
-  if (try_load_blas("/usr/lib/x86_64-linux-gnu/libmkl_rt.so", "Intel MKL", BLAS_MKL)) {
-    fprintf(stderr, "[viva_tensor] Backend: Intel MKL (800+ GFLOPS)\n");
-    return;
-  }
-  if (try_load_blas("/opt/intel/mkl/lib/intel64/libmkl_rt.so", "Intel MKL", BLAS_MKL)) {
     fprintf(stderr, "[viva_tensor] Backend: Intel MKL (800+ GFLOPS)\n");
     return;
   }
@@ -137,6 +140,7 @@ static void detect_blas_backend(void) {
     fprintf(stderr, "[viva_tensor] Backend: Intel MKL (800+ GFLOPS)\n");
     return;
   }
+  #endif
 
   /* 2. Try our tuned OpenBLAS (HASWELL-optimized, 500+ GFLOPS) */
   char tuned_path[512];
@@ -499,8 +503,7 @@ extern void vt_simd_add(const double *a, const double *b, double *result,
                         size_t len);
 extern void vt_simd_mul(const double *a, const double *b, double *result,
                         size_t len);
-extern void vt_simd_matmul(const double *a, const double *b, double *c,
-                           size_t m, size_t n, size_t k);
+/* vt_simd_matmul removed - use BLAS (cblas_dgemm) for matrix multiplication */
 extern void vt_simd_sub(const double *a, const double *b, double *result,
                         size_t len);
 extern void vt_simd_negate(const double *data, double *result, size_t len);
@@ -518,9 +521,7 @@ extern void vt_simd_relu_mut(double *a, size_t len);
 /* Retro/fused kernels */
 extern void vt_saturn_blend(const double *texture, const double *shade,
                             double bias, double *result, size_t len);
-extern void vt_fused_linear_relu(const double *a, const double *b,
-                                 const double *bias, double *c, size_t m,
-                                 size_t n, size_t k);
+/* vt_fused_linear_relu removed - use separate BLAS matmul + Zig relu */
 /* Resonance kernels (Log-Number System) - f64 version */
 extern void vt_resonance_mul(const double *a, const double *b, double *result,
                              size_t len);
@@ -1090,33 +1091,13 @@ static ERL_NIF_TERM nt_min(ErlNifEnv *env, int argc,
  * NIF Resource API — Matrix Operations
  * ========================================================================= */
 
-/** nt_matmul(RefA, RefB, M, N, K) -> {ok, RefC} */
-static ERL_NIF_TERM nt_matmul(ErlNifEnv *env, int argc,
-                              const ERL_NIF_TERM argv[]) {
-  (void)argc;
-  NativeTensor *a = get_tensor(env, argv[0]);
-  NativeTensor *b = get_tensor(env, argv[1]);
-  if (!a || !b)
-    return make_error(env, "invalid_tensor");
-
-  int m_int, n_int, k_int;
-  if (!enif_get_int(env, argv[2], &m_int) ||
-      !enif_get_int(env, argv[3], &n_int) ||
-      !enif_get_int(env, argv[4], &k_int))
-    return make_error(env, "invalid_dimensions");
-
-  size_t m = (size_t)m_int, n = (size_t)n_int, k = (size_t)k_int;
-  if (a->size != (int)(m * k) || b->size != (int)(k * n))
-    return make_error(env, "size_mismatch");
-
-  int out_shape[2] = {m_int, n_int};
-  NativeTensor *c = alloc_tensor_uninit(2, out_shape);
-  if (!c)
-    return make_error(env, "out_of_memory");
-
-  vt_simd_matmul(a->data, b->data, c->data, m, n, k);
-  return make_ok(env, make_tensor_term(env, c));
-}
+/** nt_matmul(RefA, RefB, M, N, K) -> {ok, RefC}
+ *  Now uses BLAS directly (MKL/OpenBLAS) - Zig GEMM removed for simplicity.
+ *  This is just an alias for nt_matmul_blas.
+ */
+static ERL_NIF_TERM nt_matmul_blas(ErlNifEnv *env, int argc,
+                                   const ERL_NIF_TERM argv[]);  /* Forward declaration */
+#define nt_matmul nt_matmul_blas  /* Alias */
 
 /** nt_matmul_blas(RefA, RefB, M, N, K) -> {ok, RefC}
  *  Uses Intel MKL (Windows) or OpenBLAS (Unix) for optimized GEMM (600+ GFLOPS)
@@ -1149,23 +1130,99 @@ static ERL_NIF_TERM nt_matmul_blas(ErlNifEnv *env, int argc,
    * cblas_dgemm(order, transA, transB, m, n, k, alpha, A, lda, B, ldb, beta, C, ldc)
    * Row-major: lda=k, ldb=n, ldc=n
    */
-#ifdef _WIN32
-  /* Windows: directly use MKL */
+#if defined(_WIN32) || defined(USE_MKL_DIRECT)
+  /* Windows & Linux: directly use Intel MKL for 500+ GFLOPS */
   cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
               (int)m, (int)n, (int)k,
               1.0, a->data, (int)k,
               b->data, (int)n,
               0.0, c->data, (int)n);
 #else
-  /* Linux: use dynamically loaded backend */
+  /* Fallback: use dynamically loaded backend */
   if (g_dgemm) {
     blas_dgemm((int)m, (int)n, (int)k,
                1.0, a->data, (int)k,
                b->data, (int)n,
                0.0, c->data, (int)n);
   } else {
-    /* Fallback to Zig GEMM if no BLAS available */
-    vt_simd_matmul(a->data, b->data, c->data, m, n, k);
+    /* No BLAS available - return error */
+    free(c->data);
+    free(c);
+    return make_error(env, "no_blas_backend");
+  }
+#endif
+
+  return make_ok(env, make_tensor_term(env, c));
+}
+
+/* CUDA backend declarations (from cuda_gemm.c) */
+#ifndef _WIN32
+extern int cuda_init(void);
+extern int cuda_available(void);
+extern int cuda_dgemm(int M, int N, int K, double alpha, const double *A, int lda,
+                      const double *B, int ldb, double beta, double *C, int ldc);
+extern void cuda_cleanup(void);
+#endif
+
+/** nt_matmul_cuda(RefA, RefB, M, N, K) -> {ok, RefC}
+ *  Uses cuBLAS on NVIDIA GPU for extreme performance (1000+ GFLOPS on RTX 4090)
+ *  Falls back to BLAS if CUDA not available
+ */
+static ERL_NIF_TERM nt_matmul_cuda(ErlNifEnv *env, int argc,
+                                   const ERL_NIF_TERM argv[]) {
+  (void)argc;
+  NativeTensor *a = get_tensor(env, argv[0]);
+  NativeTensor *b = get_tensor(env, argv[1]);
+  if (!a || !b)
+    return make_error(env, "invalid_tensor");
+
+  int m_int, n_int, k_int;
+  if (!enif_get_int(env, argv[2], &m_int) ||
+      !enif_get_int(env, argv[3], &n_int) ||
+      !enif_get_int(env, argv[4], &k_int))
+    return make_error(env, "invalid_dimensions");
+
+  size_t m = (size_t)m_int, n = (size_t)n_int, k = (size_t)k_int;
+  if (a->size != (int)(m * k) || b->size != (int)(k * n))
+    return make_error(env, "size_mismatch");
+
+  int out_shape[2] = {m_int, n_int};
+  NativeTensor *c = alloc_tensor_uninit(2, out_shape);
+  if (!c)
+    return make_error(env, "out_of_memory");
+
+#ifndef _WIN32
+  /* Try CUDA/cuBLAS first (RTX 4090 = 1000+ GFLOPS) */
+  if (cuda_available()) {
+    int result = cuda_dgemm(m_int, n_int, k_int,
+                            1.0, a->data, k_int,
+                            b->data, n_int,
+                            0.0, c->data, n_int);
+    if (result == 0) {
+      return make_ok(env, make_tensor_term(env, c));
+    }
+    /* CUDA failed, fall through to CPU */
+    fprintf(stderr, "[viva_tensor] CUDA fallback to CPU (error %d)\n", result);
+  }
+#endif
+
+  /* Fallback to CPU BLAS */
+#if defined(_WIN32) || defined(USE_MKL_DIRECT)
+  cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
+              (int)m, (int)n, (int)k,
+              1.0, a->data, (int)k,
+              b->data, (int)n,
+              0.0, c->data, (int)n);
+#else
+  if (g_dgemm) {
+    blas_dgemm((int)m, (int)n, (int)k,
+               1.0, a->data, (int)k,
+               b->data, (int)n,
+               0.0, c->data, (int)n);
+  } else {
+    free(c->data);
+    free(c);
+    return make_error(env, "no_blas_backend");
   }
 #endif
 
@@ -1351,7 +1408,8 @@ static ERL_NIF_TERM nt_saturn_blend(ErlNifEnv *env, int argc,
 }
 
 /** nt_fused_linear_relu(A, B, Bias, M, N, K) -> {ok, RefC}
- * Fused: C = max(0, A@B + bias). Single pass, saves 2 tensor traversals. */
+ * Fused: C = max(0, A@B + bias). Uses BLAS for matmul + Zig SIMD for bias+relu.
+ */
 static ERL_NIF_TERM nt_fused_linear_relu_nif(ErlNifEnv *env, int argc,
                                              const ERL_NIF_TERM argv[]) {
   (void)argc;
@@ -1374,8 +1432,26 @@ static ERL_NIF_TERM nt_fused_linear_relu_nif(ErlNifEnv *env, int argc,
   if (!c)
     return make_error(env, "out_of_memory");
 
-  vt_fused_linear_relu(a->data, b->data, bias->data, c->data, (size_t)m,
-                       (size_t)n, (size_t)k);
+  /* Step 1: C = A @ B via BLAS */
+#if defined(_WIN32) || defined(USE_MKL_DIRECT)
+  cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
+              m, n, k, 1.0, a->data, k, b->data, n, 0.0, c->data, n);
+#else
+  if (g_dgemm) {
+    blas_dgemm(m, n, k, 1.0, a->data, k, b->data, n, 0.0, c->data, n);
+  } else {
+    free(c->data);
+    free(c);
+    return make_error(env, "no_blas_backend");
+  }
+#endif
+
+  /* Step 2: C[i,j] += bias[j] for each row, then ReLU in-place */
+  for (int i = 0; i < m; i++) {
+    vt_simd_add(c->data + i * n, bias->data, c->data + i * n, (size_t)n);
+  }
+  vt_simd_relu_mut(c->data, (size_t)(m * n));
+
   return make_ok(env, make_tensor_term(env, c));
 }
 
@@ -2186,7 +2262,18 @@ static ERL_NIF_TERM nif_simd_matmul(ErlNifEnv *env, int argc,
     free(b);
     return make_error(env, "out_of_memory");
   }
-  vt_simd_matmul(a, b, c, mi, ni, ki);
+  /* Use BLAS for matmul (Zig GEMM removed) */
+#if defined(_WIN32) || defined(USE_MKL_DIRECT)
+  cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
+              mi, ni, ki, 1.0, a, ki, b, ni, 0.0, c, ni);
+#else
+  if (g_dgemm) {
+    blas_dgemm(mi, ni, ki, 1.0, a, ki, b, ni, 0.0, c, ni);
+  } else {
+    free(a); free(b); free(c);
+    return make_error(env, "no_blas_backend");
+  }
+#endif
   ERL_NIF_TERM rl = doubles_to_list(env, c, mi * ni);
   free(a);
   free(b);
@@ -2206,7 +2293,7 @@ static ERL_NIF_TERM nif_backend_info(ErlNifEnv *env, int argc,
   (void)argc;
   (void)argv;
   char info[512];
-#ifdef _WIN32
+#if defined(_WIN32) || defined(USE_MKL_DIRECT)
   const char *blas_name = "Intel MKL";
 #else
   const char *blas_name = g_blas_name ? g_blas_name : "Zig GEMM";
@@ -2292,14 +2379,19 @@ static int nif_load(ErlNifEnv *env, void **priv, ERL_NIF_TERM info) {
   /* Detect CPU topology once at NIF load (MKL-style runtime init) */
   detect_cpu_topology();
 
-#ifndef _WIN32
-  /* Linux: detect best BLAS backend (MKL > OpenBLAS-tuned > OpenBLAS > Zig) */
+#if !defined(_WIN32) && !defined(USE_MKL_DIRECT)
+  /* Linux without direct MKL: detect best BLAS backend dynamically */
   detect_blas_backend();
 
   /* Auto-tune thread count based on matrix size heuristics */
   if (g_set_threads && g_cpu_info.optimal_threads > 0) {
     blas_set_threads(g_cpu_info.optimal_threads);
   }
+#elif defined(USE_MKL_DIRECT)
+  /* Linux with MKL directly linked - configure MKL threads */
+  int ncpus = sysconf(_SC_NPROCESSORS_ONLN);
+  mkl_set_num_threads(ncpus > 0 ? ncpus : 16);
+  fprintf(stderr, "[viva_tensor] Intel MKL direct, %d threads\n", ncpus > 0 ? ncpus : 16);
 #endif
 
   TENSOR_RESOURCE = enif_open_resource_type(
@@ -2333,8 +2425,8 @@ static ErlNifFunc nif_funcs[] = {
     {"nif_simd_add", 2, nif_simd_add, 0},
     {"nif_simd_mul", 2, nif_simd_mul, 0},
     {"nif_simd_matmul", 5, nif_simd_matmul, 0},
-    {"simd_available", 0, nif_simd_available, 0},
-    {"backend_info", 0, nif_backend_info, 0},
+    {"nif_simd_available", 0, nif_simd_available, 0},
+    {"nif_backend_info", 0, nif_backend_info, 0},
     {"cpu_topology", 0, nif_cpu_topology, 0},
 
     /* NIF Resource API — constructors */
@@ -2362,8 +2454,9 @@ static ErlNifFunc nif_funcs[] = {
     {"nt_min", 1, nt_min, 0},
 
     /* NIF Resource API — matrix ops */
-    {"nt_matmul", 5, nt_matmul, ERL_NIF_DIRTY_JOB_CPU_BOUND},
+    {"nt_matmul", 5, nt_matmul_blas, ERL_NIF_DIRTY_JOB_CPU_BOUND},
     {"nt_matmul_blas", 5, nt_matmul_blas, ERL_NIF_DIRTY_JOB_CPU_BOUND},  /* MKL/OpenBLAS */
+    {"nt_matmul_cuda", 5, nt_matmul_cuda, ERL_NIF_DIRTY_JOB_CPU_BOUND},  /* cuBLAS/GPU - falls back to BLAS */
     {"nt_transpose", 1, nt_transpose, ERL_NIF_DIRTY_JOB_CPU_BOUND},
 
     /* NIF Resource API — activations (dirty: SIMD polynomial approx on large

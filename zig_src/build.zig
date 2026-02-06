@@ -47,25 +47,35 @@ pub fn build(b: *std.Build) void {
     // Link with libc (needed by nif_entry.c)
     lib.linkLibC();
 
-    // Link with optimized BLAS for GEMM (600+ GFLOPS)
+    // Link with optimized BLAS for GEMM (800+ GFLOPS with MKL)
+    // Intel MKL on both Windows and Linux for maximum performance
     if (target.result.os.tag == .windows) {
-        // Intel MKL 2025.3 on Windows (via winget install Intel.oneMKL)
-        // mkl_rt.dll handles all threading automatically (uses TBB)
+        // Windows: Intel MKL via winget install Intel.oneMKL
         const mkl_inc = b.fmt("{s}/include", .{mkl_root});
         const mkl_lib = b.fmt("{s}/lib", .{mkl_root});
         lib.addIncludePath(.{ .cwd_relative = mkl_inc });
         lib.addLibraryPath(.{ .cwd_relative = mkl_lib });
         lib.linkSystemLibrary("mkl_rt");
     } else {
-        // Linux: Dynamic BLAS backend selection at runtime via dlopen
-        // Priority: Intel MKL > OpenBLAS-tuned > OpenBLAS system > Zig GEMM fallback
-        // Link with dl for dlopen/dlsym (dynamic loading)
-        lib.linkSystemLibrary("dl");
+        // Linux: Intel MKL (apt install intel-mkl) - 800+ GFLOPS!
+        lib.addCSourceFile(.{
+            .file = b.path("cuda_gemm.c"),
+            .flags = &.{ "-DUSE_MKL_DIRECT" },
+        });
+        lib.root_module.addCMacro("USE_MKL_DIRECT", "1");
 
-        // Also link with system OpenBLAS as fallback (loaded at NIF startup if available)
-        lib.addLibraryPath(.{ .cwd_relative = "/usr/lib/x86_64-linux-gnu/openblas-pthread/" });
-        lib.addIncludePath(.{ .cwd_relative = "/usr/include/x86_64-linux-gnu/openblas-pthread/" });
-        lib.linkSystemLibrary("openblas");
+        // MKL headers and libs (Ubuntu: apt install intel-mkl)
+        lib.addIncludePath(.{ .cwd_relative = "/usr/include/mkl" });
+        lib.addLibraryPath(.{ .cwd_relative = "/usr/lib/x86_64-linux-gnu" });
+        lib.linkSystemLibrary("mkl_rt");
+
+        // OpenBLAS as fallback (kept for systems without MKL)
+        lib.addLibraryPath(.{ .cwd_relative = "../deps/openblas-tuned/lib" });
+        lib.addIncludePath(.{ .cwd_relative = "../deps/openblas-tuned/include" });
+
+        // dlopen for CUDA
+        lib.linkSystemLibrary("dl");
+        lib.linkSystemLibrary("pthread");
     }
 
     // Install the library

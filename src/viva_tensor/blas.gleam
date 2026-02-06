@@ -7,12 +7,7 @@
 //
 // Tuning is applied automatically based on CPU topology.
 
-import gleam/erlang/process
-import gleam/result
-import gleam/string
-import gleam/int
-import gleam/float
-import gleam/io
+// No imports needed - uses FFI
 
 /// BLAS backend types
 pub type BlasBackend {
