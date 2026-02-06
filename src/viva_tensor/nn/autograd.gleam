@@ -226,8 +226,8 @@ pub fn mul(
   // Backward: y = a * b => dy/da = b * grad, dy/db = a * grad
   // Product rule, meet chain rule. They get along well.
   let backward = fn(grad: Tensor) {
-    let assert Ok(grad_a) = ops.mul(grad, b.data)
-    let assert Ok(grad_b) = ops.mul(grad, a.data)
+    let assert Ok(grad_a) = ops.mul_auto(grad, b.data)
+    let assert Ok(grad_b) = ops.mul_auto(grad, a.data)
     [#(a.id, grad_a), #(b.id, grad_b)]
   }
 
@@ -279,7 +279,7 @@ pub fn matmul(
   a: Variable,
   b: Variable,
 ) -> Result(Traced(Variable), TensorError) {
-  use res_data <- result.try(ops.matmul(a.data, b.data))
+  use res_data <- result.try(ops.matmul_auto(a.data, b.data))
 
   let res_id = tape.next_id
 
@@ -290,8 +290,8 @@ pub fn matmul(
     let assert Ok(bt) = ops.transpose(b.data)
     let assert Ok(at) = ops.transpose(a.data)
 
-    let assert Ok(grad_a) = ops.matmul(grad, bt)
-    let assert Ok(grad_b) = ops.matmul(at, grad)
+    let assert Ok(grad_a) = ops.matmul_auto(grad, bt)
+    let assert Ok(grad_b) = ops.matmul_auto(at, grad)
 
     [#(a.id, grad_a), #(b.id, grad_b)]
   }
@@ -355,7 +355,7 @@ pub fn relu(tape: Tape, a: Variable) -> Traced(Variable) {
           False -> 0.0
         }
       })
-    let assert Ok(grad_a) = ops.mul(grad, mask)
+    let assert Ok(grad_a) = ops.mul_auto(grad, mask)
     [#(a.id, grad_a)]
   }
 
@@ -421,7 +421,7 @@ pub fn backward(
                     let pgrad_shape = tensor.shape(pgrad)
                     case existing_shape == pgrad_shape {
                       True -> {
-                        let assert Ok(sum) = ops.add(existing, pgrad)
+                        let assert Ok(sum) = ops.add_auto(existing, pgrad)
                         dict.insert(acc_grads, pid, sum)
                       }
                       False -> {
